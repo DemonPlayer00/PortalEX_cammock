@@ -9,7 +9,7 @@ nsenter -t 1 -m -- umount "$HALDIR" 2>/dev/null || nsenter -t 1 -m -- umount -l 
 sleep 1
 setprop ctl.start vendor.camera-provider-2-4
 setprop ctl.restart cameraserver
-am force-stop moe.fuqiuluo.cammockproducer 2>/dev/null || true
+/system/bin/su -c 'am force-stop moe.fuqiuluo.cammockproducer' >>/data/local/tmp/portalex/cammock-start.log 2>&1 || true
 for i in $(seq 1 20); do
   dumpsys media.camera 2>/dev/null | grep -q "Number of camera devices: [1-9]" && break
   sleep 0.5

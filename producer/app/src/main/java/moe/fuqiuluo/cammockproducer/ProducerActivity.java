@@ -43,6 +43,8 @@ public class ProducerActivity extends Activity {
         String video = getIntent().getStringExtra("video");
         worker = new Thread(() -> decodeLoop(video), "cammock-producer");
         worker.start();
+        // 不抢占 PortalEX UI；解码线程继续运行，Activity 退到后台。
+        moveTaskToBack(true);
     }
 
     @Override protected void onDestroy() { running = false; super.onDestroy(); }

@@ -52,13 +52,15 @@ setprop ctl.start vendor.camera-provider-2-4
 setprop ctl.restart cameraserver
 # cammock 自己的视频帧生产者（独立子项目 APK，不属于 PortalEX）
 PRODUCER_PKG=moe.fuqiuluo.cammockproducer
+echo "producer: dir=$DIR user=$(id -u) pkg=$(pm path "$PRODUCER_PKG" 2>&1)" >>/data/local/tmp/portalex/cammock-start.log
 if [ -f "$DIR/producer.apk" ]; then
     # 已安装时不要再 pm install -r：安装与 am start 存在竞态，会让 producer 静默不启动。
     if ! pm path "$PRODUCER_PKG" >/dev/null 2>&1; then
         pm install -r "$DIR/producer.apk" >/dev/null 2>&1 || true
         sleep 2
     fi
-    PUID=$(stat -c %u /data/data/$PRODUCER_PKG 2>/dev/null)
+    PUID=$(pm list packages -U 2>/dev/null | sed -n "s/^package:$PRODUCER_PKG uid://p" | head -1)
+    echo "producer: PUID=$PUID" >>/data/local/tmp/portalex/cammock-start.log
     if [ -n "$PUID" ]; then
         mkdir -p /data/data/$PRODUCER_PKG/files
         printf '%s\n' "$PORTALEX_CAMMOCK_TOKEN" > /data/data/$PRODUCER_PKG/files/auth.token
@@ -66,9 +68,12 @@ if [ -f "$DIR/producer.apk" ]; then
         chmod 700 /data/data/$PRODUCER_PKG/files
         chmod 600 /data/data/$PRODUCER_PKG/files/auth.token
         VIDEO=$(ls /data/local/tmp/portalex/cammock/library/*.mp4 2>/dev/null | head -1)
-        am force-stop $PRODUCER_PKG 2>/dev/null || true
+        echo "producer: VIDEO=$VIDEO" >>/data/local/tmp/portalex/cammock-start.log
+        # 必须再套一层 su：app 调起的脚本可能仍带 app UID 的 am 身份，
+        # producer 会被 AppsFilter 拦截；root 身份启动才稳定。
         if [ -n "$VIDEO" ]; then
-            am start -n "$PRODUCER_PKG/.ProducerActivity" --es video "$VIDEO" --es token "$PORTALEX_CAMMOCK_TOKEN" >/dev/null 2>&1 || true
+            /system/bin/su -c "am force-stop $PRODUCER_PKG; am start -n '$PRODUCER_PKG/.ProducerActivity' --es video '$VIDEO' --es token '$PORTALEX_CAMMOCK_TOKEN'" >>/data/local/tmp/portalex/cammock-start.log 2>&1 || true
+            echo "producer: am rc=$?" >>/data/local/tmp/portalex/cammock-start.log
         fi
     fi
 fi
