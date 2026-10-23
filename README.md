@@ -122,12 +122,14 @@ devices/oneplus/PKG110/
 
 ```text
 devices/xiaomi/sagit/
-  system/vendor/lib/hw/camera.msm8998.so   camshim HAL
-  camera.msm8998.orig.so                   真实 HAL 副本
-  producer.apk                             视频帧生产者
+  system/vendor/lib/hw/camera.msm8998.so   构建生成的 camshim 载荷（不跟踪）
+  producer.apk                             构建生成的帧生产者（不跟踪）
   start.sh / stop.sh                       挂载/卸载 overlay，重启 provider
   portal.cfg                               HAL 参数
 ```
+
+设备运行时的 `camera.msm8998.orig.so` 是根模块部署时从厂商 HAL 复制出来的副本，
+不属于仓库内容。
 
 这是 root 模块形态：PortalEX 把实现包交给 root 管理器安装，由实现的脚本负责
 overlay、SELinux、帧文件权限和 producer 生命周期。
@@ -144,6 +146,12 @@ producer/.../ProducerActivity.java
 
 ## 构建与打包
 
+> [!note]
+>
+> 仓库**只跟踪源码、脚本和配置**。`.so`、`.apk`、`.zip` 等构建产物由本地构建或
+> Release Artifact 提供，不提交进 Git；`.gitignore` 已覆盖这些文件。
+> 克隆仓库后首次使用需要先按下面的步骤构建载荷。
+
 ### OnePlus
 
 ```bash
@@ -155,9 +163,15 @@ zip -qr ../../dist/portalex-cammock-oneplus-PKG110-implementation.zip .
 ### Xiaomi / producer
 
 ```bash
+# 1. 构建 producer APK
 cd producer
 ./gradlew :app:assembleDebug
 
+# 2. 构建 camshim（armeabi-v7a）并把产物放入 sagit 载荷目录；
+#    具体 NDK/Gradle 入口由 camera-hal 构建环境提供。
+#    camera-hal/src/camshim.c -> camera.msm8998.so
+
+# 3. 组装模块 zip（producer.apk 与 camera.msm8998.so 均为本地构建产物）
 cd ../devices/xiaomi/sagit
 zip -qr ../../dist/portalex-cammock-sagit-module.zip .
 ```
