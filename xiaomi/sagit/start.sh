@@ -8,6 +8,19 @@ UPPER=$BASE/upper
 WORK=$BASE/work
 [ -d "$UPPER" ] || mkdir -p "$UPPER"
 [ -d "$WORK" ] || mkdir -p "$WORK"
+# 热重载：先摘掉旧的 overlay，确保读到的是真实 HAL，而不是上一轮的 shim。
+if mountpoint -q "$HALDIR"; then
+    umount "$HALDIR" 2>/dev/null || umount -l "$HALDIR" 2>/dev/null || true
+    sleep 1
+fi
+# 真实 HAL 副本缺失/被错误覆盖（shim 约 300KB，真件约 1MB）时重建。
+if [ ! -s "$UPPER/camera.msm8998.orig.so" ] || [ "$(stat -c %s "$UPPER/camera.msm8998.orig.so" 2>/dev/null || echo 0)" -lt 500000 ]; then
+    cp -f /vendor/lib/hw/camera.msm8998.so "$UPPER/camera.msm8998.orig.so" || {
+        echo "failed to snapshot real HAL"
+        exit 1
+    }
+    chcon u:object_r:vendor_file:s0 "$UPPER/camera.msm8998.orig.so" 2>/dev/null || true
+fi
 if ! mountpoint -q "$HALDIR" || ! mount | grep -q "overlay.*$HALDIR"; then
     mount -t overlay overlay -o "lowerdir=$HALDIR,upperdir=$UPPER,workdir=$WORK" "$HALDIR" || {
         echo "failed to mount HAL overlay"
