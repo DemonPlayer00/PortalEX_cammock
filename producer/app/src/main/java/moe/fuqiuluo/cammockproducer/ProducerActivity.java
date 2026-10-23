@@ -55,24 +55,29 @@ public class ProducerActivity extends Activity {
         return null;
     }
 
-    void publishPhoto(ByteBuffer map, Image img, int w, int h, int seq) {
+    static byte[] toNv21(Image img) {
+        int w = img.getWidth(), h = img.getHeight();
+        byte[] nv21 = new byte[w * h * 3 / 2];
+        Image.Plane[] planes = img.getPlanes();
+        Image.Plane yp = planes[0], up = planes[1], vp = planes[2];
+        ByteBuffer yb = yp.getBuffer(), ub = up.getBuffer(), vb = vp.getBuffer();
+        int pos = 0;
+        for (int y = 0; y < h; y++) {
+            int row = y * yp.getRowStride();
+            for (int x = 0; x < w; x++) nv21[pos++] = yb.get(row + x * yp.getPixelStride());
+        }
+        for (int y = 0; y < h / 2; y++) {
+            int rowU = y * up.getRowStride(), rowV = y * vp.getRowStride();
+            for (int x = 0; x < w / 2; x++) {
+                nv21[pos++] = vb.get(rowV + x * vp.getPixelStride());
+                nv21[pos++] = ub.get(rowU + x * up.getPixelStride());
+            }
+        }
+        return nv21;
+    }
+
+    void publishPhoto(ByteBuffer map, byte[] nv21, int w, int h, int seq) {
         try {
-            byte[] nv21 = new byte[w * h * 3 / 2];
-            Image.Plane[] planes = img.getPlanes();
-            Image.Plane yp = planes[0], up = planes[1], vp = planes[2];
-            ByteBuffer yb = yp.getBuffer(), ub = up.getBuffer(), vb = vp.getBuffer();
-            int yPos = 0;
-            for (int y = 0; y < h; y++) {
-                int row = y * yp.getRowStride();
-                for (int x = 0; x < w; x++) nv21[yPos++] = yb.get(row + x * yp.getPixelStride());
-            }
-            for (int y = 0; y < h / 2; y++) {
-                int rowU = y * up.getRowStride(), rowV = y * vp.getRowStride();
-                for (int x = 0; x < w / 2; x++) {
-                    nv21[yPos++] = vb.get(rowV + x * vp.getPixelStride());
-                    nv21[yPos++] = ub.get(rowU + x * up.getPixelStride());
-                }
-            }
             YuvImage yuvImage = new YuvImage(nv21, ImageFormat.NV21, w, h, null);
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             yuvImage.compressToJpeg(new Rect(0, 0, w, h), 90, out);
@@ -125,37 +130,19 @@ public class ProducerActivity extends Activity {
                     Image img = codec.getOutputImage(out);
                     if (img != null) {
                         int iw = img.getWidth(), ih = img.getHeight();
-                        int ys = align(iw, 16), uvs = align(iw, 16);
-                        if (yuv == null || yuv.capacity() < SLOT_BYTES) yuv = ByteBuffer.allocate(SLOT_BYTES);
-                        yuv.clear();
-                        Image.Plane[] planes = img.getPlanes();
-                        copyPlane(planes[0], iw, ih, ys, yuv);
-                        copyPlane(planes[2], iw / 2, ih / 2, uvs, yuv);
-                        copyPlane(planes[1], iw / 2, ih / 2, uvs, yuv);
-                        // NV21 interleave: v/u from separate planes
-                        int base = ys * ih;
-                        ByteBuffer uvDst = yuv;
-                        for (int y = 0; y < ih / 2; y++) {
-                            for (int x = 0; x < iw / 2; x++) {
-                                int off = base + y * uvs + x * 2;
-                                uvDst.put(off, planes[2].getBuffer().get(y * planes[2].getRowStride() + x * planes[2].getPixelStride()));
-                                uvDst.put(off + 1, planes[1].getBuffer().get(y * planes[1].getRowStride() + x * planes[1].getPixelStride()));
-                            }
-                        }
+                        byte[] data = toNv21(img);
                         int off = HDR + slot * SLOT_BYTES;
-                        byte[] data = new byte[ys * ih + uvs * (ih / 2)];
-                        yuv.position(0); yuv.get(data);
                         map.position(off); map.put(data);
                         map.putInt(0, MAGIC); map.putInt(4, VERSION);
                         map.putInt(8, iw); map.putInt(12, ih);
-                        map.putInt(16, ys); map.putInt(20, uvs); map.putInt(24, 0);
+                        map.putInt(16, iw); map.putInt(20, iw); map.putInt(24, 0);
                         map.putInt(28, SLOT_BYTES); map.putInt(32, SLOTS);
                         map.putInt(36, 1); map.putInt(44, slot);
                         map.putInt(40, ++seq);
                         int req = map.getInt(104);
                         if (req > 0 && req != photoReq) {
                             photoReq = req;
-                            publishPhoto(map, img, iw, ih, ++photoSeq);
+                            publishPhoto(map, data, iw, ih, ++photoSeq);
                         }
                         slot = (slot + 1) % SLOTS;
                         if (seq == 1 || seq % 30 == 0) Log.i(TAG, "frame " + seq + " " + iw + "x" + ih);
