@@ -166,6 +166,13 @@ cd build/oneplus-PKG110
 zip -qr ../../dist/portalex-cammock-oneplus-PKG110-implementation.zip .
 ```
 
+> [!note]
+>
+> 当前仓库保存了 OnePlus provider 源码和包结构，但没有提交 AIDL 生成文件与预编译
+> `provider` 二进制。`build/oneplus-PKG110/` 中的 provider 是本机构建产物；从干净克隆
+> 重新编译 OnePlus provider 需要先补齐 AIDL 生成环境。只做包验证时可直接使用该本地
+> 构建产物。
+
 ### Xiaomi / producer
 
 ```bash
@@ -179,7 +186,8 @@ cd producer
 
 # 3. 组装模块 zip（producer.apk 与 camera.msm8998.so 均为本地构建产物）
 cd ../devices/xiaomi/sagit
-zip -qr ../../dist/portalex-cammock-sagit-module.zip .
+zip -qr ../../../dist/portalex-cammock-sagit-module.zip . \
+  -x 'camera-hal/*' 'README.md' 
 ```
 
 生成的 zip 通过 PortalEX 的 Camera Mock 页面导入：
