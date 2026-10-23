@@ -3241,19 +3241,21 @@ static void portal_process_capture_result(const camera3_callback_ops_t *ops,
     if (result != NULL && g_opt_dump && portal_cam_selected()) {
         static unsigned long rn = 0;
         unsigned long n = __atomic_add_fetch(&rn, 1, __ATOMIC_RELAXED);
-        bool want = (n == 1 || n % 240 == 0);
-        if (!want) {
-            struct portal_layout LB;
-            want = portal_parse_result((const void *)result, &LB) && portal_layout_has_blob(&LB);
-        }
+        /* bring-up：前 12 条结果全部打印原始字，别等解析成功才打。 */
+        bool want = (n <= 12 || n % 240 == 0);
         if (want) {
             struct portal_layout L;
+            struct portal_layout LB;
             bool ok = portal_parse_result((const void *)result, &L);
+            bool has_blob = ok && portal_layout_has_blob(&LB);
             const char *raw = (const char *)result;
-            LOGI("结果布局#%lu：frame=%u w4=%p w8=%08x w12=%08x w16=%08x → %s num=%u", n,
+            LOGI("结果布局#%lu：frame=%u w4=%p w8=%08x w12=%08x w16=%08x w20=%08x w24=%08x w28=%08x w32=%08x → %s num=%u blob=%d", n,
                  *(const uint32_t *)raw, *(const void *const *)(raw + 4),
                  *(const uint32_t *)(raw + 8), *(const uint32_t *)(raw + 12),
-                 *(const uint32_t *)(raw + 16), L.which, L.num);
+                 *(const uint32_t *)(raw + 16), *(const uint32_t *)(raw + 20),
+                 *(const uint32_t *)(raw + 24), *(const uint32_t *)(raw + 28),
+                 *(const uint32_t *)(raw + 32), ok ? L.which : "认不出",
+                 ok ? L.num : 0, has_blob);
             if (ok) {
                 for (uint32_t i = 0; i < L.num && i < 4; i++) {
                     const camera3_stream_buffer_t *sb = &L.sbs[i];
