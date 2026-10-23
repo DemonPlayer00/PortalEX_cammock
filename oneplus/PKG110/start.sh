@@ -1,6 +1,9 @@
 #!/system/bin/sh
 # cammock 执行面：启动 OnePlus AIDL provider。PortalEX 只调用本脚本。
 DIR=${0%/*}
+mkdir -p /data/local/tmp/portalex 2>/dev/null || true
+exec >>/data/local/tmp/portalex/cammock-start.log 2>&1
+echo "=== oneplus start $(date) pid=$$ user=$(id -u) arg=$0 ==="
 . "$DIR/cammock_auth.sh" || exit 1
 PROVIDER="$DIR/provider"
 [ -x "$PROVIDER" ] || { echo "provider missing: $PROVIDER"; exit 1; }
