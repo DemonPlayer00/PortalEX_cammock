@@ -1,4 +1,6 @@
 #!/system/bin/sh
+DIR=${0%/*}
+. "$DIR/cammock_auth.sh" || exit 1
 # MI6 cammock 由 app 显式启动：挂载虚拟 HAL overlay，重启 camera provider。
 HALDIR=/vendor/lib/hw
 BASE=/cache/portalex-vcam
