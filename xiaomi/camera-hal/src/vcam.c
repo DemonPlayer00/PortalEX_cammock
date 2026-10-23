@@ -478,20 +478,11 @@ static void *result_worker(void *arg) {
         } else {
             res.output_buffers = item.bufs;
         }
-        res.partial_result = 1;
+        /* 只发一个 final result：带 output buffer，不带 metadata。
+         * 这是 Camera3Device 释放 in-flight 请求所需的最小结果。 */
+        res.result = NULL;
+        res.partial_result = 0;
         cb->process_capture_result(cb, (const camera3_capture_result_t *)&res);
-
-        /* final result 必须带 output buffer（否则 Camera3 报 No result data），
-         * 但不能再带 metadata（partial_result=0 + metadata 会被判 malformed）。 */
-        struct portal_capture_result fin;
-        memset(&fin, 0, sizeof(fin));
-        fin.frame_number = item.frame_number;
-        fin.result = NULL;
-        fin.num_output_buffers = res.num_output_buffers;
-        fin.output_buffers = res.output_buffers;
-        fin.input_buffer = NULL;
-        fin.partial_result = 0;
-        cb->process_capture_result(cb, (const camera3_capture_result_t *)&fin);
     }
     return NULL;
 }
