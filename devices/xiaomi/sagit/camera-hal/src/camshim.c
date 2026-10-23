@@ -74,7 +74,7 @@
 #include <time.h>
 #include <unistd.h>
 
-/* VVideo：视频数据的统一层（形状照 Linux VFS，见 src/vvideo/vvideo.h）。
+/* VVideo：视频数据的统一层（形状照 Linux VFS，见 camera-hal/src/vvideo/vvideo.h）。
  * 本文件只用它的**取帧接口**：挂载命名空间 → 打开节点 → 取一帧。
  * 具体从哪来（文件 / 生成器 / 共享内存 / 叠加变换）由挂载决定，这里一概不关心。 */
 #include "vvideo.h"

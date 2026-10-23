@@ -4,12 +4,13 @@ PortalEX 的外置相机模拟实现集合。PortalEX 主仓库只负责调用�
 实际接管相机栈的 provider / HAL / producer 都在这里，并按品牌和设备隔离。
 
 ```text
-camera-hal/            通用 HAL / JPEG 编解码与 camshim 源码
+camera-hal/            通用 JPEG 编解码与 VVideo 源码
 devices/
   oneplus/
     PKG110/            OnePlus AIDL provider 实现
   xiaomi/
     sagit/             小米 MI 6 HAL-overlay / root 模块实现
+      camera-hal/      MI6 camshim / vcam / GPU 渲染源码
     camera-hal-module/ 旧 root 模块骨架（冻结归档）
 producer/              视频解码与共享帧生产者（供 sagit 使用）
 interface/             标准帧文件与控制接口协议
@@ -122,6 +123,11 @@ devices/oneplus/PKG110/
 
 ```text
 devices/xiaomi/sagit/
+  camera-hal/                              MI6 camshim / vcam / GPU 渲染源码
+    CMakeLists.txt
+    src/camshim.c
+    src/vcam.c
+    src/gpu_render.c
   system/vendor/lib/hw/camera.msm8998.so   构建生成的 camshim 载荷（不跟踪）
   producer.apk                             构建生成的帧生产者（不跟踪）
   start.sh / stop.sh                       挂载/卸载 overlay，重启 provider
@@ -138,7 +144,7 @@ MI 6 的方向、UV 顺序、照片镜像等修正只存在于：
 
 ```text
 devices/xiaomi/sagit/portal.cfg
-camera-hal/src/camshim.c
+devices/xiaomi/sagit/camera-hal/src/camshim.c
 producer/.../ProducerActivity.java
 ```
 
@@ -169,7 +175,7 @@ cd producer
 
 # 2. 构建 camshim（armeabi-v7a）并把产物放入 sagit 载荷目录；
 #    具体 NDK/Gradle 入口由 camera-hal 构建环境提供。
-#    camera-hal/src/camshim.c -> camera.msm8998.so
+#    devices/xiaomi/sagit/camera-hal/src/camshim.c -> camera.msm8998.so
 
 # 3. 组装模块 zip（producer.apk 与 camera.msm8998.so 均为本地构建产物）
 cd ../devices/xiaomi/sagit

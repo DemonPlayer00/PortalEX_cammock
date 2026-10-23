@@ -6,24 +6,25 @@ project(portal_camshim C)
 # 只用 C、不链接 libc++（`-DANDROID_STL=none`）：HAL 进程里多带一个 C++ 运行时
 # 既没必要，也容易与 vendor 自己的 libc++ 版本打架。
 #
-# VVideo（src/vvideo/）是**视频数据的统一层**（形状照 Linux VFS）：
+# VVideo（camera-hal/src/vvideo/）是**视频数据的统一层**（形状照 Linux VFS）：
 # 命名空间 + 挂载表 + 操作表，后端按 file_system_type 注册。
 # 它的数据面只碰 RAM（memfd / 常驻缓冲），事件面用 futex（不轮询）。
+set(COMMON_HAL ${CMAKE_CURRENT_SOURCE_DIR}/../../../../camera-hal/src)
 set(PORTAL_VVIDEO_SRC
-    src/vvideo/vvideo_core.c
-    src/vvideo/vvideo_event.c
-    src/vvideo/vvfs_mem.c
-    src/vvideo/vvfs_gen.c
-    src/vvideo/vvfs_shm.c
-    src/vvideo/vvfs_xform.c
-    src/vvideo/vvfs_ctl.c
-    src/vvideo/vvfs_notify.c
-    src/vvideo/vvfs_builtin.c)
+    ${COMMON_HAL}/vvideo/vvideo_core.c
+    ${COMMON_HAL}/vvideo/vvideo_event.c
+    ${COMMON_HAL}/vvideo/vvfs_mem.c
+    ${COMMON_HAL}/vvideo/vvfs_gen.c
+    ${COMMON_HAL}/vvideo/vvfs_shm.c
+    ${COMMON_HAL}/vvideo/vvfs_xform.c
+    ${COMMON_HAL}/vvideo/vvfs_ctl.c
+    ${COMMON_HAL}/vvideo/vvfs_notify.c
+    ${COMMON_HAL}/vvideo/vvfs_builtin.c)
 
 add_library(camshim SHARED src/camshim.c ${PORTAL_VVIDEO_SRC})
-add_library(vcam SHARED src/vcam.c src/gpu_render.c src/jpeg_encode.c)
-target_include_directories(camshim PRIVATE src/vvideo)
-target_include_directories(vcam PRIVATE src)
+add_library(vcam SHARED src/vcam.c src/gpu_render.c ${COMMON_HAL}/jpeg_encode.c)
+target_include_directories(camshim PRIVATE src ${COMMON_HAL}/vvideo)
+target_include_directories(vcam PRIVATE src ${COMMON_HAL})
 
 target_link_libraries(camshim log dl)
 target_link_libraries(vcam log dl EGL GLESv2)

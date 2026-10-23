@@ -53,7 +53,7 @@ accepted and only update state.
 
 Path: `/data/local/tmp/portalex/cammock.frames`
 
-The header is the one defined by `camera-hal/src/camshim.c` and
+The header is the one defined by `devices/xiaomi/sagit/camera-hal/src/camshim.c` and
 `CameraFrameSink.kt`. This subproject adds one optional header word at offset
 108: `consumer_req_seq` (int32). The device backend increments it on every
 capture request; the app-side player polls it and only publishes a frame when

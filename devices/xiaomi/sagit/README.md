@@ -5,8 +5,9 @@ so it does not use the OnePlus AIDL provider path.
 
 This directory is an APatch/Magisk HAL-overlay module:
 
+- `camera-hal/` — MI6-specific camshim / vcam / GPU rendering sources
 - `system/vendor/lib/hw/camera.msm8998.so` — virtual camera HAL payload
-  (built locally from `camera-hal/src/camshim.c`; not tracked by Git)
+  (built locally from `camera-hal/src/camshim.c`; source lives here, binary not tracked)
 - `producer.apk` — frame producer payload (built from `producer/`; not tracked by Git)
 - `post-fs-data.sh` — mounts the HAL overlay
 - `service.sh` / `sepolicy.rule` — module lifecycle and policy
