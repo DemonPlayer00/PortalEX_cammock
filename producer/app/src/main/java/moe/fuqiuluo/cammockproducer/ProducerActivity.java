@@ -60,7 +60,7 @@ public class ProducerActivity extends Activity {
         byte[] out = new byte[src.length];
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
-                int dx = y, dy = w - 1 - x;
+                int dx = h - 1 - y, dy = x;
                 out[dy * nw + dx] = src[y * w + x];
             }
         }
@@ -68,7 +68,7 @@ public class ProducerActivity extends Activity {
         int uw = w / 2, uh = h / 2;
         for (int y = 0; y < uh; y++) {
             for (int x = 0; x < uw; x++) {
-                int dx = y, dy = uw - 1 - x;
+                int dx = uh - 1 - y, dy = x;
                 int si = suv + y * w + x * 2;
                 int di = duv + dy * nw + dx * 2;
                 out[di] = src[si];
@@ -139,14 +139,16 @@ public class ProducerActivity extends Activity {
     void publishPhoto(ByteBuffer map, byte[] nv21, int w, int h, int seq) {
         try {
             if ((map.getInt(76) & 1) != 0) nv21 = mirrorHorizontal(nv21, w, h);
-            YuvImage yuvImage = new YuvImage(nv21, ImageFormat.NV21, w, h, null);
+            nv21 = rotate90(nv21, w, h);
+            int rw = h, rh = w;
+            YuvImage yuvImage = new YuvImage(nv21, ImageFormat.NV21, rw, rh, null);
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            yuvImage.compressToJpeg(new Rect(0, 0, w, h), 90, out);
+            yuvImage.compressToJpeg(new Rect(0, 0, rw, rh), 90, out);
             byte[] jpeg = out.toByteArray();
             int photoOff = HDR + SLOTS * SLOT_BYTES;
             if (jpeg.length <= 0 || photoOff + jpeg.length > map.capacity()) return;
             map.position(photoOff); map.put(jpeg);
-            map.putInt(80, w); map.putInt(84, h);
+            map.putInt(80, rw); map.putInt(84, rh);
             map.putInt(88, jpeg.length); map.putInt(92, seq);
             Log.i(TAG, "photo published " + w + "x" + h + " " + jpeg.length + " bytes seq=" + seq);
         } catch (Throwable t) { Log.e(TAG, "photo encode failed", t); }
