@@ -405,6 +405,9 @@ static void load_mapper(void) {
  * AOSP 是 output_buffers@12、input_buffer@16。照 AOSP 写会得到
  * "output buffer ... is not inflight" / "partial_result 0 must be in [1,2]"。 */
 struct portal_capture_result {
+    /* AOSP camera3_capture_result_t 的 32 位布局。之前把 output/input 顺序写反，
+     * 导致框架收到的 num_output_buffers > 0 但 output_buffers 为空，
+     * 请求永远留在 Camera3Device 的 in-flight 列表里。 */
     uint32_t frame_number;
     const void *result;
     uint32_t num_output_buffers;
@@ -477,6 +480,18 @@ static void *result_worker(void *arg) {
         }
         res.partial_result = 1;
         cb->process_capture_result(cb, (const camera3_capture_result_t *)&res);
+
+        /* final result 必须带 output buffer（否则 Camera3 报 No result data），
+         * 但不能再带 metadata（partial_result=0 + metadata 会被判 malformed）。 */
+        struct portal_capture_result fin;
+        memset(&fin, 0, sizeof(fin));
+        fin.frame_number = item.frame_number;
+        fin.result = NULL;
+        fin.num_output_buffers = res.num_output_buffers;
+        fin.output_buffers = res.output_buffers;
+        fin.input_buffer = NULL;
+        fin.partial_result = 0;
+        cb->process_capture_result(cb, (const camera3_capture_result_t *)&fin);
     }
     return NULL;
 }
