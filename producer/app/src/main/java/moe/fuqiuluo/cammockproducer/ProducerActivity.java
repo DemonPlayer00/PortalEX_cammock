@@ -55,11 +55,27 @@ public class ProducerActivity extends Activity {
         return null;
     }
 
-    void publishPhoto(ByteBuffer map, byte[] nv21, int w, int h, int seq) {
+    void publishPhoto(ByteBuffer map, Image img, int w, int h, int seq) {
         try {
-            YuvImage img = new YuvImage(nv21, ImageFormat.NV21, w, h, null);
+            byte[] nv21 = new byte[w * h * 3 / 2];
+            Image.Plane[] planes = img.getPlanes();
+            Image.Plane yp = planes[0], up = planes[1], vp = planes[2];
+            ByteBuffer yb = yp.getBuffer(), ub = up.getBuffer(), vb = vp.getBuffer();
+            int yPos = 0;
+            for (int y = 0; y < h; y++) {
+                int row = y * yp.getRowStride();
+                for (int x = 0; x < w; x++) nv21[yPos++] = yb.get(row + x * yp.getPixelStride());
+            }
+            for (int y = 0; y < h / 2; y++) {
+                int rowU = y * up.getRowStride(), rowV = y * vp.getRowStride();
+                for (int x = 0; x < w / 2; x++) {
+                    nv21[yPos++] = vb.get(rowV + x * vp.getPixelStride());
+                    nv21[yPos++] = ub.get(rowU + x * up.getPixelStride());
+                }
+            }
+            YuvImage yuvImage = new YuvImage(nv21, ImageFormat.NV21, w, h, null);
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            img.compressToJpeg(new Rect(0, 0, w, h), 90, out);
+            yuvImage.compressToJpeg(new Rect(0, 0, w, h), 90, out);
             byte[] jpeg = out.toByteArray();
             int photoOff = HDR + SLOTS * SLOT_BYTES;
             if (jpeg.length <= 0 || photoOff + jpeg.length > map.capacity()) return;
@@ -139,7 +155,7 @@ public class ProducerActivity extends Activity {
                         int req = map.getInt(104);
                         if (req > 0 && req != photoReq) {
                             photoReq = req;
-                            publishPhoto(map, data, iw, ih, ++photoSeq);
+                            publishPhoto(map, img, iw, ih, ++photoSeq);
                         }
                         slot = (slot + 1) % SLOTS;
                         if (seq == 1 || seq % 30 == 0) Log.i(TAG, "frame " + seq + " " + iw + "x" + ih);

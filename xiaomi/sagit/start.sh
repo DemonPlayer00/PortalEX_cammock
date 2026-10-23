@@ -36,7 +36,7 @@ if [ -f "$DIR/producer.apk" ]; then
         fi
     fi
 fi
-for i in 1 2 3 4 5 6 7 8 9 10; do
+for i in $(seq 1 20); do
   dumpsys media.camera 2>/dev/null | grep -q "Number of camera devices: [1-9]" && break
   sleep 0.5
 done
