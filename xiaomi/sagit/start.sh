@@ -13,6 +13,21 @@ if mountpoint -q "$HALDIR"; then
     umount "$HALDIR" 2>/dev/null || umount -l "$HALDIR" 2>/dev/null || true
     sleep 1
 fi
+# cammock.frames 的权限/SELinux 标签在重启后会丢；每次启动重新准备，
+# 否则 camshim 会以 errno=13 打不开帧文件，照片注入退化为真实相机。
+FRAME_DIR=/data/local/tmp/portalex
+FRAME_FILE=$FRAME_DIR/cammock.frames
+mkdir -p "$FRAME_DIR"
+[ -f "$FRAME_FILE" ] || truncate -s 16777216 "$FRAME_FILE" 2>/dev/null || true
+chmod 777 "$FRAME_DIR" 2>/dev/null || true
+chmod 666 "$FRAME_FILE" 2>/dev/null || true
+chcon u:object_r:shell_data_file:s0 "$FRAME_DIR" 2>/dev/null || true
+chcon u:object_r:shell_data_file:s0 "$FRAME_FILE" 2>/dev/null || true
+if [ -x /data/adb/apd ]; then
+    /data/adb/apd sepolicy --live "allow hal_camera_default shell_data_file dir { search read open getattr }" 2>/dev/null || true
+    /data/adb/apd sepolicy --live "allow hal_camera_default shell_data_file file { read write open getattr map }" 2>/dev/null || true
+fi
+
 # 真实 HAL 副本缺失/被错误覆盖（shim 约 300KB，真件约 1MB）时重建。
 if [ ! -s "$UPPER/camera.msm8998.orig.so" ] || [ "$(stat -c %s "$UPPER/camera.msm8998.orig.so" 2>/dev/null || echo 0)" -lt 500000 ]; then
     cp -f /vendor/lib/hw/camera.msm8998.so "$UPPER/camera.msm8998.orig.so" || {
