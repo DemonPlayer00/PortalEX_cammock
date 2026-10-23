@@ -641,19 +641,26 @@ static bool copy_cammock_yuv(uint8_t *base, struct portal_android_ycbcr *yc,
     uint32_t sw = hdr[2], sh = hdr[3], ys = hdr[4], uvs = hdr[5];
     uint32_t slot_bytes = hdr[7], slots = hdr[8], seq = hdr[10], idx = hdr[11];
     if (sw == 0 || sh == 0 || ys < sw || uvs < sw || slots == 0 || idx >= slots) return false;
-    if (w > sw || h > sh) return false;
     size_t off = 4096u + (size_t)idx * slot_bytes;
     if (off + (size_t)ys * sh > g_cammock_len || off + (size_t)ys * sh + (size_t)uvs * (sh / 2) > g_cammock_len) return false;
     const uint8_t *src = (const uint8_t *)g_cammock_map + off;
+    /* 目标流尺寸可能和视频不同：最近邻缩放，保证视频总能铺满预览。 */
     for (uint32_t y = 0; y < h; y++) {
-        memcpy(base + (size_t)y * yc->ystride, src + (size_t)y * ys, w);
+        uint32_t sy = (uint32_t)((uint64_t)y * sh / h);
+        const uint8_t *row = src + (size_t)sy * ys;
+        uint8_t *out = base + (size_t)y * yc->ystride;
+        for (uint32_t x = 0; x < w; x++) {
+            out[x] = row[(uint32_t)((uint64_t)x * sw / w)];
+        }
     }
     if (yc->cb && yc->cr && yc->cstride > 0) {
         const uint8_t *uv = src + (size_t)ys * sh;
         for (uint32_t y = 0; y < h / 2; y++) {
+            uint32_t sy = (uint32_t)((uint64_t)y * (sh / 2) / (h / 2));
             for (uint32_t x = 0; x < w / 2; x++) {
+                uint32_t sx = (uint32_t)((uint64_t)x * (sw / 2) / (w / 2));
                 size_t di = (size_t)y * yc->cstride + (size_t)x * yc->chroma_step;
-                size_t si = (size_t)y * uvs + (size_t)x * 2;
+                size_t si = (size_t)sy * uvs + (size_t)sx * 2;
                 ((uint8_t *)yc->cb)[di] = uv[si];
                 ((uint8_t *)yc->cr)[di] = uv[si + 1];
             }
