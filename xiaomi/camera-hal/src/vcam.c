@@ -472,8 +472,10 @@ static void *result_worker(void *arg) {
         camera3_stream_buffer_t *persist =
                 (camera3_stream_buffer_t *)calloc(8, sizeof(camera3_stream_buffer_t));
         if (persist != NULL) {
-            for (uint32_t i = 0; i < item.num_output_buffers && i < 8; i++)
+            for (uint32_t i = 0; i < item.num_output_buffers && i < 8; i++) {
                 persist[i] = item.bufs[i];
+                persist[i].release_fence = -1; /* HAL 已写完，立即释放 */
+            }
             res.output_buffers = persist;
         } else {
             res.output_buffers = item.bufs;
