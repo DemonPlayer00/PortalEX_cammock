@@ -1,5 +1,8 @@
 #!/system/bin/sh
 DIR=${0%/*}
+mkdir -p /data/local/tmp/portalex 2>/dev/null || true
+exec >>/data/local/tmp/portalex/cammock-start.log 2>&1
+echo "=== start $(date) pid=$$ arg=$0 ==="
 . "$DIR/cammock_auth.sh" || exit 1
 # MI6 cammock 由 app 显式启动：挂载虚拟 HAL overlay，重启 camera provider。
 HALDIR=/vendor/lib/hw
@@ -9,8 +12,8 @@ WORK=$BASE/work
 [ -d "$UPPER" ] || mkdir -p "$UPPER"
 [ -d "$WORK" ] || mkdir -p "$WORK"
 # 热重载：先摘掉旧的 overlay，确保读到的是真实 HAL，而不是上一轮的 shim。
-if mountpoint -q "$HALDIR"; then
-    umount "$HALDIR" 2>/dev/null || umount -l "$HALDIR" 2>/dev/null || true
+if nsenter -t 1 -m -- mountpoint -q "$HALDIR"; then
+    nsenter -t 1 -m -- umount "$HALDIR" 2>/dev/null || nsenter -t 1 -m -- umount -l "$HALDIR" 2>/dev/null || true
     sleep 1
 fi
 # cammock.frames 的权限/SELinux 标签在重启后会丢；每次启动重新准备，
@@ -37,8 +40,8 @@ if [ ! -s "$UPPER/camera.msm8998.orig.so" ] || [ "$(stat -c %s "$UPPER/camera.ms
     [ -f "$DIR/portal.cfg" ] && cp -f "$DIR/portal.cfg" "$UPPER/portal.cfg" 2>/dev/null || true
     chcon u:object_r:vendor_file:s0 "$UPPER/camera.msm8998.orig.so" 2>/dev/null || true
 fi
-if ! mountpoint -q "$HALDIR" || ! mount | grep -q "overlay.*$HALDIR"; then
-    mount -t overlay overlay -o "lowerdir=$HALDIR,upperdir=$UPPER,workdir=$WORK" "$HALDIR" || {
+if ! nsenter -t 1 -m -- mountpoint -q "$HALDIR" || ! nsenter -t 1 -m -- mount | grep -q "overlay.*$HALDIR"; then
+    nsenter -t 1 -m -- mount -t overlay overlay -o "lowerdir=$HALDIR,upperdir=$UPPER,workdir=$WORK" "$HALDIR" || {
         echo "failed to mount HAL overlay"
         exit 1
     }
@@ -50,7 +53,11 @@ setprop ctl.restart cameraserver
 # cammock 自己的视频帧生产者（独立子项目 APK，不属于 PortalEX）
 PRODUCER_PKG=moe.fuqiuluo.cammockproducer
 if [ -f "$DIR/producer.apk" ]; then
-    pm install -r "$DIR/producer.apk" >/dev/null 2>&1 || true
+    # 已安装时不要再 pm install -r：安装与 am start 存在竞态，会让 producer 静默不启动。
+    if ! pm path "$PRODUCER_PKG" >/dev/null 2>&1; then
+        pm install -r "$DIR/producer.apk" >/dev/null 2>&1 || true
+        sleep 2
+    fi
     PUID=$(stat -c %u /data/data/$PRODUCER_PKG 2>/dev/null)
     if [ -n "$PUID" ]; then
         mkdir -p /data/data/$PRODUCER_PKG/files

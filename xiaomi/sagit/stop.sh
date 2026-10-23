@@ -5,7 +5,7 @@ DIR=${0%/*}
 HALDIR=/vendor/lib/hw
 setprop ctl.stop vendor.camera-provider-2-4
 sleep 1
-umount "$HALDIR" 2>/dev/null || umount -l "$HALDIR" 2>/dev/null || true
+nsenter -t 1 -m -- umount "$HALDIR" 2>/dev/null || nsenter -t 1 -m -- umount -l "$HALDIR" 2>/dev/null || true
 sleep 1
 setprop ctl.start vendor.camera-provider-2-4
 setprop ctl.restart cameraserver
