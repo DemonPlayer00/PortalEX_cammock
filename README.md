@@ -4,12 +4,13 @@ PortalEX 的外置相机模拟实现集合。PortalEX 主仓库只负责调用�
 实际接管相机栈的 provider / HAL / producer 都在这里，并按品牌和设备隔离。
 
 ```text
-oneplus/
-  PKG110/              OnePlus AIDL provider 实现
-xiaomi/
-  sagit/               小米 MI 6 HAL-overlay / root 模块实现
-  camera-hal/          HAL shim 与 camshim 源码
-  camera-hal-module/   root 模块骨架
+camera-hal/            通用 HAL / JPEG 编解码与 camshim 源码
+devices/
+  oneplus/
+    PKG110/            OnePlus AIDL provider 实现
+  xiaomi/
+    sagit/             小米 MI 6 HAL-overlay / root 模块实现
+    camera-hal-module/ 旧 root 模块骨架（冻结归档）
 producer/              视频解码与共享帧生产者（供 sagit 使用）
 interface/             标准帧文件与控制接口协议
 build/                 已组装实现的构建工作区
@@ -107,7 +108,7 @@ files/cammock/current/auth.nonce
 ### OnePlus PKG110
 
 ```text
-oneplus/PKG110/
+devices/oneplus/PKG110/
   provider             AIDL camera provider
   meta.bin / tags.bin  相机元数据
   start.sh             启动 provider、重启 cameraserver
@@ -120,7 +121,7 @@ oneplus/PKG110/
 ### Xiaomi MI 6 / sagit
 
 ```text
-xiaomi/sagit/
+devices/xiaomi/sagit/
   system/vendor/lib/hw/camera.msm8998.so   camshim HAL
   camera.msm8998.orig.so                   真实 HAL 副本
   producer.apk                             视频帧生产者
@@ -134,8 +135,8 @@ overlay、SELinux、帧文件权限和 producer 生命周期。
 MI 6 的方向、UV 顺序、照片镜像等修正只存在于：
 
 ```text
-xiaomi/sagit/portal.cfg
-xiaomi/camera-hal/src/camshim.c
+devices/xiaomi/sagit/portal.cfg
+camera-hal/src/camshim.c
 producer/.../ProducerActivity.java
 ```
 
@@ -157,7 +158,7 @@ zip -qr ../../dist/portalex-cammock-oneplus-PKG110-implementation.zip .
 cd producer
 ./gradlew :app:assembleDebug
 
-cd ../xiaomi/sagit
+cd ../devices/xiaomi/sagit
 zip -qr ../../dist/portalex-cammock-sagit-module.zip .
 ```
 
