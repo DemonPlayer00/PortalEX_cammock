@@ -76,6 +76,26 @@ public class ProducerActivity extends Activity {
         return nv21;
     }
 
+    static byte[] rotate180(byte[] src, int w, int h) {
+        int ySize = w * h, uvSize = w * h / 2;
+        byte[] out = new byte[src.length];
+        for (int y = 0; y < h; y++) {
+            int srcRow = (h - 1 - y) * w;
+            int dstRow = y * w;
+            for (int x = 0; x < w; x++) out[dstRow + x] = src[srcRow + (w - 1 - x)];
+        }
+        int uv = ySize;
+        for (int y = 0; y < h / 2; y++) {
+            int srcRow = uv + (h / 2 - 1 - y) * w;
+            int dstRow = uv + y * w;
+            for (int x = 0; x < w / 2; x++) {
+                out[dstRow + x * 2] = src[srcRow + (w / 2 - 1 - x) * 2];
+                out[dstRow + x * 2 + 1] = src[srcRow + (w / 2 - 1 - x) * 2 + 1];
+            }
+        }
+        return out;
+    }
+
     void publishPhoto(ByteBuffer map, byte[] nv21, int w, int h, int seq) {
         try {
             YuvImage yuvImage = new YuvImage(nv21, ImageFormat.NV21, w, h, null);
