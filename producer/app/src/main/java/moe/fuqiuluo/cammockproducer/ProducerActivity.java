@@ -55,6 +55,29 @@ public class ProducerActivity extends Activity {
         return null;
     }
 
+    static byte[] rotate90(byte[] src, int w, int h) {
+        int nw = h, nh = w;
+        byte[] out = new byte[src.length];
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int dx = y, dy = w - 1 - x;
+                out[dy * nw + dx] = src[y * w + x];
+            }
+        }
+        int suv = w * h, duv = nw * nh;
+        int uw = w / 2, uh = h / 2;
+        for (int y = 0; y < uh; y++) {
+            for (int x = 0; x < uw; x++) {
+                int dx = y, dy = uw - 1 - x;
+                int si = suv + y * w + x * 2;
+                int di = duv + dy * nw + dx * 2;
+                out[di] = src[si];
+                out[di + 1] = src[si + 1];
+            }
+        }
+        return out;
+    }
+
     static byte[] toNv21(Image img) {
         int w = img.getWidth(), h = img.getHeight();
         byte[] nv21 = new byte[w * h * 3 / 2];
