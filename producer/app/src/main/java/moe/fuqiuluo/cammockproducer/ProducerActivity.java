@@ -141,6 +141,7 @@ public class ProducerActivity extends Activity {
             if ((map.getInt(76) & 1) != 0) nv21 = mirrorHorizontal(nv21, w, h);
             nv21 = rotate90(nv21, w, h);
             int rw = h, rh = w;
+            nv21 = mirrorHorizontal(nv21, rw, rh);
             YuvImage yuvImage = new YuvImage(nv21, ImageFormat.NV21, rw, rh, null);
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             yuvImage.compressToJpeg(new Rect(0, 0, rw, rh), 90, out);
