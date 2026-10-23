@@ -160,18 +160,36 @@ producer/.../ProducerActivity.java
 
 ### OnePlus
 
+先由仓库内固定的 AIDL 源生成绑定：
+
 ```bash
-# 组装实现包（provider 为预编译执行体）
-cd build/oneplus-PKG110
+cd devices/oneplus/PKG110/provider
+AIDL="$ANDROID_HOME/build-tools/35.0.0/aidl" ./scripts/gen-aidl.sh
+```
+
+再编译 provider：
+
+```bash
+cmake -S . -B ../../../../build/oneplus-provider \
+  -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-35
+cmake --build ../../../../build/oneplus-provider -j
+```
+
+最后组装实现包：
+
+```bash
+cp ../../../../build/oneplus-provider/portal_camera_provider \
+   ../../../../build/oneplus-PKG110/provider
+cd ../../../../build/oneplus-PKG110
 zip -qr ../../dist/portalex-cammock-oneplus-PKG110-implementation.zip .
 ```
 
 > [!note]
 >
-> 当前仓库保存了 OnePlus provider 源码和包结构，但没有提交 AIDL 生成文件与预编译
-> `provider` 二进制。`build/oneplus-PKG110/` 中的 provider 是本机构建产物；从干净克隆
-> 重新编译 OnePlus provider 需要先补齐 AIDL 生成环境。只做包验证时可直接使用该本地
-> 构建产物。
+> `aidl-src/` 是固定版本的 AIDL 接口源；`aidl/` 是生成目录并被 `.gitignore` 忽略。
+> 使用 build-tools 35.x 的 `aidl`；更新版本可能生成与当前 NDK 头文件不兼容的
+> `asBinderReference()` 调用。生成目录可以用 `-DPORTAL_AIDL_ROOT=...` 指向其他位置。
 
 ### Xiaomi / producer
 
