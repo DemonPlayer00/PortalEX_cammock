@@ -19,6 +19,7 @@ if [ ! -s "$UPPER/camera.msm8998.orig.so" ] || [ "$(stat -c %s "$UPPER/camera.ms
         echo "failed to snapshot real HAL"
         exit 1
     }
+    [ -f "$DIR/portal.cfg" ] && cp -f "$DIR/portal.cfg" "$UPPER/portal.cfg" 2>/dev/null || true
     chcon u:object_r:vendor_file:s0 "$UPPER/camera.msm8998.orig.so" 2>/dev/null || true
 fi
 if ! mountpoint -q "$HALDIR" || ! mount | grep -q "overlay.*$HALDIR"; then

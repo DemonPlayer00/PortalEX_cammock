@@ -119,8 +119,26 @@ public class ProducerActivity extends Activity {
         return out;
     }
 
+    static byte[] mirrorHorizontal(byte[] src, int w, int h) {
+        byte[] out = new byte[src.length];
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) out[y * w + x] = src[y * w + (w - 1 - x)];
+        }
+        int uv = w * h;
+        for (int y = 0; y < h / 2; y++) {
+            for (int x = 0; x < w / 2; x++) {
+                int si = uv + y * w + (w / 2 - 1 - x) * 2;
+                int di = uv + y * w + x * 2;
+                out[di] = src[si];
+                out[di + 1] = src[si + 1];
+            }
+        }
+        return out;
+    }
+
     void publishPhoto(ByteBuffer map, byte[] nv21, int w, int h, int seq) {
         try {
+            if ((map.getInt(76) & 1) != 0) nv21 = mirrorHorizontal(nv21, w, h);
             YuvImage yuvImage = new YuvImage(nv21, ImageFormat.NV21, w, h, null);
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             yuvImage.compressToJpeg(new Rect(0, 0, w, h), 90, out);

@@ -20,6 +20,7 @@ fail_boot() {
 mkdir -p "$UPPER" "$WORK" || fail_boot "cannot create overlay dirs"
 [ -s "$MODDIR/system/vendor/lib/hw/camera.msm8998.so" ] || fail_boot "module payload missing"
 cp -f "$MODDIR/system/vendor/lib/hw/camera.msm8998.so" "$UPPER/" 2>/dev/null || fail_boot "payload copy failed"
+[ -f "$MODDIR/portal.cfg" ] && cp -f "$MODDIR/portal.cfg" "$UPPER/portal.cfg" 2>/dev/null || true
 # 真件副本在**挂载前**从 /vendor 现取：不把厂商 blob 放进仓库/模块包。
 if [ ! -s "$UPPER/camera.msm8998.orig.so" ]; then
     cp -f /vendor/lib/hw/camera.msm8998.so "$UPPER/camera.msm8998.orig.so" 2>/dev/null || fail_boot "real HAL copy failed"
