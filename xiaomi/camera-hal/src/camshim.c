@@ -7888,17 +7888,20 @@ static int shim_open(const struct hw_module_t *module, const char *id,
                  (unsigned long long)q[6], (unsigned long long)q[7], (unsigned long long)q[8]);
             LOGI("device.common: tag=0x%08x version=0x%08x module=%p priv=%p",
                  d0->common.tag, d0->common.version, (void *)d0->common.module, d0->priv);
-            if (!g_opt_open_probe) return rc;
-            pthread_t th;
-            struct portal_bind_arg *ba = malloc(sizeof(*ba));
-            if (ba != NULL) {
-                ba->inner = d0;
-                ba->out = (void **)device;
-                if (pthread_create(&th, NULL, portal_binder_thread, ba) == 0) {
-                    pthread_detach(th);
-                } else {
-                    LOGE("绑定探测线程创建失败");
-                    free(ba);
+            /* 诊断线程不是接管的前提：即使 open_probe=0，也必须继续走到
+             * 后面的 ops 接管代码。之前的 return 让 patch 永远不执行。 */
+            if (g_opt_open_probe) {
+                pthread_t th;
+                struct portal_bind_arg *ba = malloc(sizeof(*ba));
+                if (ba != NULL) {
+                    ba->inner = d0;
+                    ba->out = (void **)device;
+                    if (pthread_create(&th, NULL, portal_binder_thread, ba) == 0) {
+                        pthread_detach(th);
+                    } else {
+                        LOGE("绑定探测线程创建失败");
+                        free(ba);
+                    }
                 }
             }
         }
