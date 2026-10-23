@@ -1,5 +1,6 @@
 #!/system/bin/sh
 DIR=${0%/*}
+. "$DIR/cammock_auth.sh" || exit 1
 SRC=/data/local/tmp/portalex/cammock/library
 DST="$DIR/io/download"
 mkdir -p "$DST"

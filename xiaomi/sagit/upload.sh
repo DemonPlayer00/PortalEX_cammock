@@ -1,6 +1,7 @@
 #!/system/bin/sh
 # MI6 实现自己的库位置；app 只提供标准 io/upload 快照。
 DIR=${0%/*}
+. "$DIR/cammock_auth.sh" || exit 1
 SRC="$DIR/io/upload"
 DST=/data/local/tmp/portalex/cammock/library
 [ -f "$SRC/routes.json" ] || { echo "io/upload/routes.json missing"; exit 1; }

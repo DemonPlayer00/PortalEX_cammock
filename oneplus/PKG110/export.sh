@@ -1,5 +1,6 @@
 #!/system/bin/sh
 DIR=${0%/*}
+. "$DIR/cammock_auth.sh" || exit 1
 ID=$(cat "$DIR/io/export/request.txt" 2>/dev/null)
 [ -n "$ID" ] || { echo "missing export request"; exit 1; }
 SRC="/data/system/portalex/camera/videos/$ID.mp4"

@@ -1,6 +1,7 @@
 #!/system/bin/sh
 # cammock 执行面：把 app 提供的 io/upload 快照送到 system_server 库。
 DIR=${0%/*}
+. "$DIR/cammock_auth.sh" || exit 1
 SRC="$DIR/io/upload"
 DST=/data/system/portalex/camera
 [ -f "$SRC/routes.json" ] || { echo "io/upload/routes.json missing"; exit 1; }
