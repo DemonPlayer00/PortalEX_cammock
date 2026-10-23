@@ -1,19 +1,19 @@
 # PortalEX cammock
 
-External camera-hook implementation for PortalEX.
-
-## Package format
-
-A release zip imported by PortalEX contains:
+External camera-hook implementations for PortalEX, laid out by brand and
+device codename.
 
 ```
-cammock.json
-provider
-meta.bin   (optional)
-tags.bin   (optional)
+oneplus/
+  PKG110/              OnePlus PKG110 AIDL provider
+    cammock.json
+    provider/
+xiaomi/
+  sagit/               Xiaomi MI 6 (sagit) Magisk/APatch HAL module
+interface/             shared frame-file protocol
 ```
 
-`cammock.json`:
+Each implementation's `cammock.json` contains:
 
 ```json
 {
@@ -23,24 +23,31 @@ tags.bin   (optional)
 ```
 
 `supportedModels` is checked against Android `Build.MODEL`, `Build.DEVICE`,
-and `Build.PRODUCT` when the zip is imported. A mismatch is a warning only.
+and `Build.PRODUCT` at import time. A mismatch is a warning only.
 
-## Build
+## OnePlus PKG110
+
+Build:
 
 ```bash
-cd oneplus/provider
+cd oneplus/PKG110/provider
 cmake -S . -B build -DANDROID_ABI=arm64-v8a
 cmake --build build -j
 ```
 
-The resulting `portal_camera_provider` is packaged as `provider`.
+Package `portal_camera_provider` as `provider` together with
+`cammock.json` and optional `meta.bin`/`tags.bin`.
 
-## Runtime
+PortalEX installs the zip in app-private storage and releases the runtime
+files to `/data/local/tmp/portalex/cammock/`.
 
-PortalEX installs the zip in app-private storage, then releases the provider
-and optional meta/tags to `/data/local/tmp/portalex/cammock/` when camera mock
-starts.
+## Xiaomi MI 6 / sagit
 
-This repository only contains the device-specific hook implementation.
-system_server selection, PortalEX UI, upload/download, and the OpenCV face
-calibration remain in the PortalEX repository.
+Magisk/APatch HAL-overlay implementation. Install the module directory as a
+module zip; it replaces the vendor camera HAL at boot. This is a different
+integration path from the OnePlus AIDL provider.
+
+## Shared
+
+The selection protocol, PortalEX UI, upload/download, and face calibration
+remain in the PortalEX repository.
