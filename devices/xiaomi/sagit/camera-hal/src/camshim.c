@@ -3249,7 +3249,15 @@ static bool portal_write_photo(const camera3_stream_buffer_t *sb) {
     if (dump_photo) LOGI("照片#%lu 搬运前（等 fence 之后）句柄：", pn);
     if (dump_photo) portal_dump_handle(91, handle);
     void *vaddr = NULL;
-    int rc = g_gbm_lock(g_gbm_self, handle, lock_usage, &bounds, &vaddr);
+    int rc = -1;
+    /* 拍照 buffer 也可能在 result 刚返回时仍不可锁；与预览的 1s fence 策略对齐，
+     * 重试几次再放弃，避免偶发把小规格照片留在未改写的绿色 buffer。 */
+    for (int attempt = 0; attempt < 5; attempt++) {
+        vaddr = NULL;
+        rc = g_gbm_lock(g_gbm_self, handle, lock_usage, &bounds, &vaddr);
+        if (rc == 0 && vaddr != NULL) break;
+        usleep(10 * 1000);
+    }
     if (rc != 0 || vaddr == NULL) {
         PORTAL_LOG_ONCE(LOGE, "照片 buffer lock 失败 rc=%d（SW 写位没补上？）→ 保留真实照片", rc);
         return false;
