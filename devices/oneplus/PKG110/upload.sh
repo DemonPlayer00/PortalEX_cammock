@@ -1,4 +1,5 @@
 #!/system/bin/sh
+set -eu
 # cammock 执行面：把 app 提供的 io/upload 快照送到 system_server 库。
 DIR=${0%/*}
 . "$DIR/cammock_auth.sh" || exit 1
@@ -7,7 +8,14 @@ DST=/data/system/portalex/camera
 [ -f "$SRC/routes.json" ] || { echo "io/upload/routes.json missing"; exit 1; }
 mkdir -p "$DST/videos"
 cp -f "$SRC/routes.json" "$DST/library.json"
-for f in "$SRC"/*.mp4; do [ -f "$f" ] && cp -f "$f" "$DST/videos/"; done
+for f in "$SRC"/*.mp4; do
+    [ -f "$f" ] || continue
+    cp -f "$f" "$DST/videos/" || { echo "copy failed: $f" >&2; exit 1; }
+    src_size=$(stat -c %s "$f")
+    dst_size=$(stat -c %s "$DST/videos/${f##*/}")
+    [ "$src_size" = "$dst_size" ] || { echo "size mismatch: $f ($src_size != $dst_size)" >&2; exit 1; }
+done
+sync
 chown -R system:system "$DST"
 chmod 600 "$DST/library.json"
 echo "cammock library uploaded to system_server"
