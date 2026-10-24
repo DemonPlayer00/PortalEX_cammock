@@ -2886,7 +2886,7 @@ static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uin
  * PRIVATE/RGBA 预览面：lockYCbCr 失败后只能拿到裸地址，但 MI6 的 640x480 预览
  * 实际是 RGBA8888 线性面。把外源 NV21 采样后转成 RGBA，避免只写 Y（全屏绿）。
  */
-static bool portal_fill_rgba_external(uint8_t *dst, uint32_t w, uint32_t h) {
+static bool portal_fill_rgba_external(uint8_t *dst, uint32_t w, uint32_t h, size_t stride) {
     const uint8_t *src = portal_fsrc_pick();
     const struct portal_frame_hdr *hdr = (const struct portal_frame_hdr *)g_fsrc_map;
     if (src == NULL || hdr == NULL || dst == NULL || w == 0 || h == 0) return false;
@@ -2908,7 +2908,7 @@ static bool portal_fill_rgba_external(uint8_t *dst, uint32_t w, uint32_t h) {
             int r = (298 * yy + 409 * v + 128) >> 8;
             int g = (298 * yy - 100 * u - 208 * v + 128) >> 8;
             int b = (298 * yy + 516 * u + 128) >> 8;
-            uint8_t *p = dst + ((size_t)y * w + x) * 4;
+            uint8_t *p = dst + (size_t)y * stride + (size_t)x * 4;
             p[0] = (uint8_t)(r < 0 ? 0 : (r > 255 ? 255 : r));
             p[1] = (uint8_t)(g < 0 ? 0 : (g > 255 ? 255 : g));
             p[2] = (uint8_t)(b < 0 ? 0 : (b > 255 ? 255 : b));
@@ -2966,6 +2966,7 @@ struct portal_map {
     size_t ystride, cstride, chroma_step;
     bool used;
     bool rgba; /* lock() 兜底：这块 PRIVATE buffer 实际是 RGBA，不能按 YUV 写 */
+    size_t rgba_stride; /* RGBA 每行字节数（由 native_handle 的 stride 字段推导） */
 };
 
 #define PORTAL_MAP_SLOTS 8
@@ -3007,6 +3008,7 @@ static struct portal_map *portal_get_map(void *handle, uint32_t w, uint32_t h) {
             free_slot->chroma_step = yc.chroma_step;
             free_slot->used = true;
             free_slot->rgba = false;
+            free_slot->rgba_stride = 0;
             return free_slot;
         }
         PORTAL_LOG_ONCE(LOGE, "lockYCbCr 失败 rc=%d（y=%p ystride=%zu）→ 退 lock()", rc, yc.y,
@@ -3030,6 +3032,24 @@ static struct portal_map *portal_get_map(void *handle, uint32_t w, uint32_t h) {
     free_slot->chroma_step = 0;
     free_slot->used = true;
     free_slot->rgba = true;
+
+    /* MI6 的 PRIVATE 预览面是 RGBA8888；lock() 不给 stride，但 native_handle
+     * 的 ints 通常含 (width,height,stride,format)。读不到/不合理就退回 w*4。 */
+    free_slot->rgba_stride = (size_t)w * 4;
+    {
+        const int32_t *hh = (const int32_t *)handle;
+        if (hh != NULL && hh[1] >= 0 && hh[1] <= 8 && hh[2] > 0 && hh[2] <= 64) {
+            const int32_t *ints = hh + 3 + hh[1];
+            int stride = ints[2];
+            if (stride >= (int)w && stride <= 8192) {
+                size_t bytes = (size_t)stride;
+                if (bytes < (size_t)w * 4) bytes *= 4; /* stride 以像素计 */
+                free_slot->rgba_stride = bytes;
+            }
+            LOGI("RGBA 预览映射：%ux%u native_ints stride=%d format=%d → rgbaStride=%zu",
+                 w, h, stride, ints[3], free_slot->rgba_stride);
+        }
+    }
     return free_slot;
 }
 /** 真的把图案写进去；返回是否成功（阶梯见上方注释） */
@@ -3054,7 +3074,7 @@ static bool portal_write_frame(void *handle, uint32_t w, uint32_t h, uint32_t fr
     struct portal_map *m = portal_get_map(handle, w, h);
     if (m == NULL) return false;
     if (m->rgba) {
-        if (!portal_fill_rgba_external(m->y, w, h)) return false;
+        if (!portal_fill_rgba_external(m->y, w, h, m->rgba_stride ? m->rgba_stride : (size_t)w * 4)) return false;
         PORTAL_LOG_ONCE(LOGI, "RGBA 预览面：外源帧已转为 RGBA 写入（%ux%u）", w, h);
     } else {
         portal_fill_frame(m->y, m->ystride, m->cb, m->cr, m->cstride, m->chroma_step, w, h, frame);
