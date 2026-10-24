@@ -2361,6 +2361,14 @@ static void portal_scrub_streams(void *stream_list) {
                  st->format, st->width, st->height, st->usage);
             continue;
         }
+        /* MI6 的 640x480 format=0x22 小预览流不一定出现在 request/result
+         * 的 output_buffers 里（真实 HAL 自己消费）；清 UBWC 后 ISP 仍按平铺写，
+         * 就会留下规则网格绿屏。没有注入路径的小规格 PRIVATE 流保留厂商分配。 */
+        if (f == 0x22 && st->width <= 1280u && st->height <= 720u) {
+            LOGI("小规格 PRIVATE 流（format=0x%x %ux%u）保留 UBWC：无注入路径",
+                 f, st->width, st->height);
+            continue;
+        }
         uint32_t before = st->usage;
         st->usage |= PORTAL_ADD_SW_USAGE;
         /* BLOB（0x21）是线性字节块，没有平铺问题 ⇒ 只补写位、不动 UBWC；
