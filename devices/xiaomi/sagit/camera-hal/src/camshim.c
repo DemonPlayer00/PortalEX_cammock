@@ -157,6 +157,17 @@ struct hw_device_t {
     int (*close)(struct hw_device_t *device);
 };
 
+/** camera_module_t 前段布局（32 位 MI6，只用于 open_legacy 槽位）。 */
+struct portal_camera_module_t {
+    struct hw_module_t common;
+    int (*get_number_of_cameras)(void);
+    int (*get_camera_info)(int, void *);
+    int (*set_callbacks)(const void *);
+    void (*get_vendor_tag_ops)(void *);
+    int (*open_legacy)(const struct hw_module_t *, const char *, uint32_t,
+                       struct hw_device_t **);
+};
+
 /** camera3_device 的公开布局：common + ops + priv（自 Android 5 起未变） */
 struct camera3_device {
     struct hw_device_t common;
@@ -360,6 +371,11 @@ static bool load_libui_mapper(void) {
 
 static void *g_real_handle = NULL;
 static struct hw_module_t *g_real_module = NULL;
+/* 32 位 camera_module_t: hw_module_t(128) + get_number(4)+get_info(4)+set_callbacks(4)+vendor_tags(4)
+ * 之后的 open_legacy 槽位。原件在这里检查 module==自己的 HMI；provider 调我们复制的 HMI
+ * 时会把 shim 地址传进去，必须转成真件地址，否则 QCamera 报 Invalid module。 */
+static int (*g_real_open_legacy)(const struct hw_module_t *, const char *, uint32_t,
+                                 struct hw_device_t **) = NULL;
 static int (*g_real_open)(const struct hw_module_t *, const char *, struct hw_device_t **) = NULL;
 static int (*g_real_process_capture_request)(const struct camera3_device *,
                                              camera3_capture_request_t *) = NULL;
@@ -7949,6 +7965,15 @@ static void *portal_cam_timeout_thread(void *arg) {
     return NULL;
 }
 
+#if !defined(__aarch64__)
+static int shim_open_legacy(const struct hw_module_t *module, const char *id,
+                            uint32_t version, struct hw_device_t **device) {
+    (void)module;
+    if (g_real_open_legacy == NULL || g_real_module == NULL) return -ENODEV;
+    return g_real_open_legacy(g_real_module, id, version, device);
+}
+#endif
+
 static int shim_open(const struct hw_module_t *module, const char *id,
                      struct hw_device_t **device) {
     (void)module;
@@ -8168,6 +8193,11 @@ static void load_real_hal(void) {
         return;
     }
 
+#if !defined(__aarch64__)
+    /* 真件 camera_module_t 的 open_legacy 槽位（32 位偏移 144）。 */
+    g_real_open_legacy = ((struct portal_camera_module_t *)g_real_module)->open_legacy;
+#endif
+
     /* 整块照抄：tag / 版本 / id / name / author / methods / dso，
      * 以及 camera_module_t 那一串回调（少抄一个都可能被 provider 当成垃圾指针调用） */
     unsigned copy_bytes = g_opt_real_hmi_bytes ? g_opt_real_hmi_bytes : REAL_HMI_BYTES;
@@ -8181,6 +8211,11 @@ static void load_real_hal(void) {
     }
 
     /* 只改这一处：open 走我们的（接管 camera3_device_ops 的入口） */
+#if !defined(__aarch64__)
+    if (g_real_open_legacy != NULL) {
+        ((struct portal_camera_module_t *)&HMI)->open_legacy = shim_open_legacy;
+    }
+#endif
     HMI.common.methods = &g_methods;
 
     g_real_module->dso = g_real_handle;
