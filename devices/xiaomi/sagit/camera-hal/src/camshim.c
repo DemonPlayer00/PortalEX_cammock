@@ -1503,6 +1503,50 @@ static void portal_count_write(double ms) {
  * 转发 + 接管
  * ------------------------------------------------------------------ */
 
+/* 请求输出快照：MI6 的 result 回调有时只带主 4K 流，640x480 小流
+ * 虽然出现在 request 里，却不会出现在 result 的 output_buffers 中。
+ * 在 result 阶段用这个快照补写小流，避免"UBWC 已清但没人写"的绿屏。 */
+#define PORTAL_REQ_SNAP_MAX 8
+#define PORTAL_REQ_SNAP_STREAMS 8
+struct portal_req_snapshot {
+    uint32_t frame;
+    uint32_t num;
+    bool used;
+    camera3_stream_buffer_t sbs[PORTAL_REQ_SNAP_STREAMS];
+};
+static struct portal_req_snapshot g_req_snap[PORTAL_REQ_SNAP_MAX];
+
+static void portal_store_request_snapshot(const camera3_capture_request_t *request) {
+    if (request == NULL) return;
+    struct portal_layout LR;
+    if (!portal_parse_request(request, &LR) || LR.num == 0) return;
+    uint32_t frame = *(const uint32_t *)request;
+    uint32_t slot = frame % PORTAL_REQ_SNAP_MAX;
+    struct portal_req_snapshot *snap = &g_req_snap[slot];
+    snap->frame = frame;
+    snap->num = LR.num > PORTAL_REQ_SNAP_STREAMS ? PORTAL_REQ_SNAP_STREAMS : LR.num;
+    snap->used = true;
+    for (uint32_t i = 0; i < snap->num; i++) snap->sbs[i] = LR.sbs[i];
+}
+
+static const struct portal_req_snapshot *portal_find_request_snapshot(uint32_t frame) {
+    struct portal_req_snapshot *snap = &g_req_snap[frame % PORTAL_REQ_SNAP_MAX];
+    return (snap->used && snap->frame == frame) ? snap : NULL;
+}
+
+static void portal_drop_request_snapshot(uint32_t frame) {
+    struct portal_req_snapshot *snap = &g_req_snap[frame % PORTAL_REQ_SNAP_MAX];
+    if (snap->used && snap->frame == frame) snap->used = false;
+}
+
+static bool portal_result_has_buffer(const struct portal_layout *L, const void *handle) {
+    if (L == NULL || handle == NULL) return false;
+    for (uint32_t i = 0; i < L->num; i++) {
+        if (L->sbs[i].buffer != NULL && *L->sbs[i].buffer == handle) return true;
+    }
+    return false;
+}
+
 static int shim_process_capture_request(const struct camera3_device *dev,
                                         camera3_capture_request_t *request) {
     static unsigned long calls = 0;
@@ -1522,6 +1566,9 @@ static int shim_process_capture_request(const struct camera3_device *dev,
 #endif
     }
     /* **拍照请求的早期信号**：这里就能看到 BLOB 流，比结果早一百多毫秒 */
+    if (request != NULL && g_opt_inject && portal_cam_selected()) {
+        portal_store_request_snapshot(request);
+    }
     if (request != NULL && g_opt_src_file[0] != '\0' && portal_cam_selected()) {
         struct portal_layout LR;
         if (portal_parse_request(request, &LR)) {
@@ -3315,6 +3362,25 @@ static void portal_process_capture_result(const camera3_callback_ops_t *ops,
                     continue;
                 }
                 if (inject_into_buffer(sb, *(const uint32_t *)result)) wrote = true;
+            }
+            /* 补写 result 未带出的小输出流。必须在真实 HAL 的 result 之后，
+             * 否则小流会被 ISP 再次覆盖；这里用 request 快照里的 buffer handle。 */
+            uint32_t frame_no = *(const uint32_t *)result;
+            const struct portal_req_snapshot *snap = portal_find_request_snapshot(frame_no);
+            if (snap != NULL) {
+                for (uint32_t i = 0; i < snap->num; i++) {
+                    const camera3_stream_buffer_t *sb = &snap->sbs[i];
+                    if (sb->stream == NULL || sb->buffer == NULL) continue;
+                    if (portal_result_has_buffer(&L, *sb->buffer)) continue;
+                    if (sb->stream->format == 0x21) {
+                        if (sb->status == 0 && portal_write_photo(sb)) wrote = true;
+                    } else if (inject_into_buffer(sb, frame_no)) {
+                        wrote = true;
+                        PORTAL_LOG_ONCE(LOGI, "补写 result 缺失流：format=0x%x %ux%u",
+                                        sb->stream->format, sb->stream->width, sb->stream->height);
+                    }
+                }
+                portal_drop_request_snapshot(frame_no);
             }
             if (wrote) {
                 unsigned long n = __atomic_add_fetch(&g_injected_frames, 1, __ATOMIC_RELAXED);
