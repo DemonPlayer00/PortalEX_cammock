@@ -2807,6 +2807,9 @@ static bool portal_build_maps(int slot, uint32_t sw, uint32_t sh, uint32_t dw, u
  * 把外源帧拷进目标平面。几何/布局不一致时**只拷重叠区**（左上对齐）并记一条，
  * 不做缩放 —— 缩放应该由 app 侧的解码器在 Surface 上完成（那是免费的 GPU 缩放）。
  */
+/* MI6 摄像头调用方的素材方向：源竖屏帧需要顺时针 90°。 */
+#define CAMMOCK_ROTATE_RIGHT 1
+
 static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uint8_t *dcr,
                                  size_t dcstride, size_t dstep, uint32_t w, uint32_t h) {
     const uint8_t *src = portal_fsrc_pick();
@@ -2817,96 +2820,62 @@ static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uin
     if (sw != w || sh != h) {
         PORTAL_LOG_ONCE(LOGI, "源帧 %ux%u 与流 %ux%u 不同：在 HAL 内做 cover 缩放", sw, sh, w, h);
     }
-    /* 回写消费端（HAL 自己的流）尺寸：app 侧可据此做提示/自适应（缩放由这里负责） */
     if (g_fsrc_writable && (hdr->consumer_w != w || hdr->consumer_h != h)) {
         hdr->consumer_w = w;
         hdr->consumer_h = h;
     }
 
-    /* 色度布局先判：目标必须是 NV12/NV21 交织（cb/cr 相邻、step=2） */
-    bool interleaved = (dstep == 2 && (dcr == dcb + 1 || dcb == dcr + 1));
-    const uint8_t *suvp = src + (size_t)sy * sh;
-
-    if (sw == w && sh == h) {
-        /* 几何一致：最快路径，整行 memcpy */
-        for (uint32_t r = 0; r < h; r++) {
-            memcpy(dy + (size_t)r * dystride, src + (size_t)r * sy, w);
-        }
-        if (dcb == NULL || dcstride == 0 || suv == 0 || !interleaved) return true;
-        for (uint32_t r = 0; r < (h + 1) / 2; r++) {
-            memcpy(dcb + (size_t)r * dcstride, suvp + (size_t)r * suv, w);
-        }
-        return true;
-    }
-
-    struct timespec ty0;
-    clock_gettime(CLOCK_MONOTONIC, &ty0);
-    if (!portal_build_maps(0, sw, sh, w, h)) return false;
-    const uint32_t *map_rows = g_scale[0].rows;
-    const uint32_t *map_cols = g_scale[0].cols;
-    /* 亮度：逐行按列映射取源字节（查表，无分支计算） */
-    /*
-     * **4 字节成组**取源、一次 32 位存目标：逐字节 gather 在这颗 SoC 上要 ~46 ms/帧
-     * （1600×1200 目标、源 1920×1080），吃掉一半帧率。成组之后访存次数降到 1/4。
-     * 列映射已预计算，且目标行 4 字节对齐（stride 为 16 对齐），所以可以直接 32 位存。
-     */
-    for (uint32_t r = 0; r < h; r++) {
-        const uint8_t *srow = src + (size_t)map_rows[r] * sy;
-        uint8_t *drow = dy + (size_t)r * dystride;
-        uint32_t x = 0;
-        for (; x + 4 <= w; x += 4) {
-            uint32_t v = (uint32_t)srow[map_cols[x]] | ((uint32_t)srow[map_cols[x + 1]] << 8) |
-                         ((uint32_t)srow[map_cols[x + 2]] << 16) |
-                         ((uint32_t)srow[map_cols[x + 3]] << 24);
-            memcpy(drow + x, &v, 4);
-        }
-        for (; x < w; x++) drow[x] = srow[map_cols[x]];
-    }
-    double y_ms = portal_seconds_since(&ty0) * 1000.0;
-    if (dcb == NULL || dcstride == 0 || suv == 0) return true;
-    if (!interleaved) {
-        PORTAL_LOG_ONCE(LOGE, "目标色度不是 NV12/NV21 交织布局（step=%zu cb=%p cr=%p）→ 只写亮度",
-                        dstep, dcb, dcr);
-        return true;
-    }
-    /* 色度：半分辨率，每元素 2 字节（U,V）一起搬，省一半访存 */
-    struct timespec tu0;
-    clock_gettime(CLOCK_MONOTONIC, &tu0);
-    uint32_t cw = w / 2, ch = h / 2;
-    if (!portal_build_maps(1, sw / 2, sh / 2, cw, ch)) return true;
-    const uint32_t *cmap_rows = g_scale[1].rows;
-    const uint32_t *cmap_cols = g_scale[1].cols;
-    for (uint32_t r = 0; r < ch; r++) {
-        const uint8_t *srow = suvp + (size_t)cmap_rows[r] * suv;
-        uint8_t *drow = dcb + (size_t)r * dcstride;
-        uint32_t x = 0;
-        if (!g_opt_swap_uv) {
-            /* 两个色度元素（4 字节）一次搬 */
-            for (; x + 2 <= cw; x += 2) {
-                const uint8_t *p0 = srow + (size_t)cmap_cols[x] * 2;
-                const uint8_t *p1 = srow + (size_t)cmap_cols[x + 1] * 2;
-                uint32_t v = (uint32_t)p0[0] | ((uint32_t)p0[1] << 8) |
-                             ((uint32_t)p1[0] << 16) | ((uint32_t)p1[1] << 24);
-                memcpy(drow + x * 2, &v, 4);
-            }
-        }
-        for (; x < cw; x++) {
-            const uint8_t *sp = srow + (size_t)cmap_cols[x] * 2;
-            if (g_opt_swap_uv) {
-                drow[x * 2] = sp[1];
-                drow[x * 2 + 1] = sp[0];
+    /* 源是 NV21；按目标 android_ycbcr 的 cb/cr 实际指向决定 U/V 顺序。
+     * 旋转后不能直接 memcpy 源 UV，否则会偏绿/偏紫。 */
+    const uint32_t rw = CAMMOCK_ROTATE_RIGHT ? sh : sw;
+    const uint32_t rh = CAMMOCK_ROTATE_RIGHT ? sw : sh;
+    for (uint32_t y = 0; y < h; y++) {
+        uint32_t ry = (uint32_t)((uint64_t)y * rh / h);
+        uint8_t *drow = dy + (size_t)y * dystride;
+        for (uint32_t x = 0; x < w; x++) {
+            uint32_t rx = (uint32_t)((uint64_t)x * rw / w);
+            uint32_t sx, syy;
+            if (CAMMOCK_ROTATE_RIGHT) {
+                sx = ry;
+                syy = sh - 1u - rx;
             } else {
-                drow[x * 2] = sp[0];
-                drow[x * 2 + 1] = sp[1];
+                sx = sw - 1u - ry;
+                syy = rx;
             }
+            if (sx >= sw) sx = sw - 1u;
+            if (syy >= sh) syy = sh - 1u;
+            drow[x] = src[(size_t)syy * sy + sx];
         }
     }
-    {
-        static unsigned long split_n = 0;
-        unsigned long sn = __atomic_add_fetch(&split_n, 1, __ATOMIC_RELAXED);
-        if (sn <= 3 || sn % 240 == 0) {
-            LOGI("缩放分段耗时：亮度 %.1f ms / 色度 %.1f ms（%ux%u → %ux%u）", y_ms,
-                 portal_seconds_since(&tu0) * 1000.0, sw, sh, w, h);
+
+    if (dcb == NULL || dcr == NULL || dcstride == 0 || dstep != 2) return true;
+    const uint8_t *suvp = src + (size_t)sy * sh;
+    uint32_t cw = w / 2, ch = h / 2;
+    if (cw == 0 || ch == 0) return true;
+    const uint32_t rwc = rw / 2, rhc = rh / 2;
+    for (uint32_t y = 0; y < ch; y++) {
+        uint32_t ry = (uint32_t)((uint64_t)y * rhc / ch);
+        for (uint32_t x = 0; x < cw; x++) {
+            uint32_t rx = (uint32_t)((uint64_t)x * rwc / cw);
+            uint32_t scx, scy;
+            if (CAMMOCK_ROTATE_RIGHT) {
+                scx = ry;
+                scy = (sh / 2) - 1u - rx;
+            } else {
+                scx = (sw / 2) - 1u - ry;
+                scy = rx;
+            }
+            if (scx >= sw / 2) scx = (sw / 2) - 1u;
+            if (scy >= sh / 2) scy = (sh / 2) - 1u;
+            const uint8_t *sp = suvp + (size_t)scy * suv + (size_t)scx * 2;
+            size_t di = (size_t)y * dcstride + (size_t)x * dstep;
+            const uint8_t u = sp[1]; /* NV21: V,U */
+            const uint8_t v = sp[0];
+            if (dcr == dcb + 1) { /* NV12: U,V */
+                dcb[di] = u; dcr[di] = v;
+            } else { /* NV21 或描述符的 V,U */
+                dcb[di] = v; dcr[di] = u;
+            }
         }
     }
     return true;

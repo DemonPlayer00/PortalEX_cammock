@@ -21,12 +21,16 @@ using Nv21ToI420Fn = Nv12ToI420Fn;
 using I420ScaleFn = int (*)(const uint8_t*, int, const uint8_t*, int, const uint8_t*, int,
                             int, int, uint8_t*, int, uint8_t*, int, uint8_t*, int,
                             int, int, int);
+using I420RotateFn = int (*)(const uint8_t*, int, const uint8_t*, int, const uint8_t*, int,
+                             uint8_t*, int, uint8_t*, int, uint8_t*, int,
+                             int, int, int);
 
 struct LibYuv {
     void* handle = nullptr;
     Nv12ToI420Fn nv12 = nullptr;
     Nv21ToI420Fn nv21 = nullptr;
     I420ScaleFn scale = nullptr;
+    I420RotateFn rotate = nullptr;
     bool load() {
         if (handle) return true;
         handle = dlopen("libyuv.so", RTLD_NOW | RTLD_LOCAL);
@@ -34,6 +38,7 @@ struct LibYuv {
         nv12 = (Nv12ToI420Fn)dlsym(handle, "NV12ToI420");
         nv21 = (Nv21ToI420Fn)dlsym(handle, "NV21ToI420");
         scale = (I420ScaleFn)dlsym(handle, "I420Scale");
+        rotate = (I420RotateFn)dlsym(handle, "I420Rotate");
         return nv12 && nv21 && scale;
     }
 };
@@ -178,9 +183,13 @@ struct Decoder {
                     }
                     if (stride <= 0) stride = width;
                     if (slice <= 0) slice = height;
+                    // 测试素材本身是竖屏（720x1280），没有 rotation metadata；而相机
+                    // 请求方按横屏消费，直接把像素铺进去就成“脖子朝右”的横躺帧。
+                    // 无 metadata 时使用 OnePlus 的实现校正：逆时针 90°（libyuv 270）。
+                    const int effectiveRotation = rotation != 0 ? rotation : 270;
                     ok = copyBuffer(data, size, color, stride, slice, width, height,
                                     y, cb, cr, yStride, cStride, chromaStep, dstW, dstH,
-                                    rotation == 270);
+                                    effectiveRotation);
                 }
                 AMediaCodec_releaseOutputBuffer(codec, (size_t)out, false);
                 if (ok) return true;
@@ -207,7 +216,7 @@ struct Decoder {
                            int srcSlice, int srcW, int srcH,
                            void* y, void* cb, void* cr,
                            size_t yStride, size_t cStride, size_t chromaStep,
-                           int dstW, int dstH, bool flip180) {
+                           int dstW, int dstH, int rotationDegrees) {
         if (data == nullptr || size == 0 || dstW <= 0 || dstH <= 0) return false;
         // 常见输出：19=YUV420Planar，21=YUV420SemiPlanar，0x7F420888=Flexible。
         // Flexible 的具体布局由 codec 报的 color-format 决定；未知时按 SemiPlanar 尝试。
@@ -263,42 +272,96 @@ struct Decoder {
                                  cropW, cropH);
                 }
                 if (rc == 0) {
+                    // Android 的 rotation-degrees 是“顺时针转正”的角度。
+                    // 当前实现原先只对 270 做 180° flip，既没有转正 90/270，也会把
+                    // 带旋转元数据的竖屏视频弄成横躺；这里统一在缩放前旋转 I420。
+                    const int rotW = (rotationDegrees == 90 || rotationDegrees == 270) ? cropH : cropW;
+                    const int rotH = (rotationDegrees == 90 || rotationDegrees == 270) ? cropW : cropH;
+                    std::vector<uint8_t> rotated;
+                    const uint8_t* riy = iy;
+                    const uint8_t* riu = iu;
+                    const uint8_t* riv = iv;
+                    int riStrideY = cropW;
+                    if (rotationDegrees != 0) {
+                        rotated.resize((size_t)rotW * rotH * 3 / 2);
+                        uint8_t* ry = rotated.data();
+                        uint8_t* ru = ry + (size_t)rotW * rotH;
+                        uint8_t* rv = ru + (size_t)(rotW / 2) * (rotH / 2);
+                        int mode = rotationDegrees == 90 ? 1 : rotationDegrees == 180 ? 2 : 3;
+                        int rrc = ly.rotate ? ly.rotate(
+                            iy, cropW, iu, cropW / 2, iv, cropW / 2,
+                            ry, rotW, ru, rotW / 2, rv, rotW / 2,
+                            cropW, cropH, mode) : -1;
+                        if (rrc != 0) {
+                            // 极少数 libyuv 不带 I420Rotate：按行手工旋转（只支持 90/270/180）。
+                            if (mode == 2) {
+                                for (int row = 0; row < cropH; ++row) {
+                                    const uint8_t* src = iy + (size_t)(cropH - 1 - row) * cropW;
+                                    uint8_t* dst = ry + (size_t)row * rotW;
+                                    for (int col = 0; col < cropW; ++col) dst[col] = src[cropW - 1 - col];
+                                }
+                                for (int row = 0; row < cropH / 2; ++row) {
+                                    const uint8_t* su = iu + (size_t)(cropH / 2 - 1 - row) * (cropW / 2);
+                                    const uint8_t* sv = iv + (size_t)(cropH / 2 - 1 - row) * (cropW / 2);
+                                    for (int col = 0; col < cropW / 2; ++col) {
+                                        ru[(size_t)row * (cropW / 2) + col] = su[cropW / 2 - 1 - col];
+                                        rv[(size_t)row * (cropW / 2) + col] = sv[cropW / 2 - 1 - col];
+                                    }
+                                }
+                            } else if (mode == 1) { // 90° CW
+                                for (int row = 0; row < rotH; ++row) {
+                                    for (int col = 0; col < rotW; ++col) {
+                                        int sx = row;
+                                        int sy = cropH - 1 - col;
+                                        ry[(size_t)row * rotW + col] = iy[(size_t)sy * cropW + sx];
+                                    }
+                                }
+                                for (int row = 0; row < rotH / 2; ++row) {
+                                    for (int col = 0; col < rotW / 2; ++col) {
+                                        int sx = row;
+                                        int sy = cropH / 2 - 1 - col;
+                                        ru[(size_t)row * (rotW / 2) + col] = iu[(size_t)sy * (cropW / 2) + sx];
+                                        rv[(size_t)row * (rotW / 2) + col] = iv[(size_t)sy * (cropW / 2) + sx];
+                                    }
+                                }
+                            } else { // 270° CW == 90° CCW
+                                for (int row = 0; row < rotH; ++row) {
+                                    for (int col = 0; col < rotW; ++col) {
+                                        int sx = cropW - 1 - row;
+                                        int sy = col;
+                                        ry[(size_t)row * rotW + col] = iy[(size_t)sy * cropW + sx];
+                                    }
+                                }
+                                for (int row = 0; row < rotH / 2; ++row) {
+                                    for (int col = 0; col < rotW / 2; ++col) {
+                                        int sx = cropW / 2 - 1 - row;
+                                        int sy = col;
+                                        ru[(size_t)row * (rotW / 2) + col] = iu[(size_t)sy * (cropW / 2) + sx];
+                                        rv[(size_t)row * (rotW / 2) + col] = iv[(size_t)sy * (cropW / 2) + sx];
+                                    }
+                                }
+                            }
+                        }
+                        riy = rotated.data();
+                        riu = riy + (size_t)rotW * rotH;
+                        riv = riu + (size_t)(rotW / 2) * (rotH / 2);
+                        riStrideY = rotW;
+                    }
                     uint8_t* sy = scaled.data();
                     uint8_t* su = sy + (size_t)dstW * dstH;
                     uint8_t* sv = su + (size_t)(dstW / 2) * (dstH / 2);
-                    if (ly.scale(iy, cropW, iu, cropW / 2, iv, cropW / 2, cropW, cropH,
+                    if (ly.scale(riy, riStrideY, riu, rotW / 2, riv, rotW / 2, rotW, rotH,
                                  sy, dstW, su, dstW / 2, sv, dstW / 2,
                                  dstW, dstH, 0) == 0) {
-                        // 只有源视频带 270° 旋转时才是倒置的横向帧；
-                        // 无旋转的测试视频保持原方向，避免把正常数字倒过来。
-                        if (flip180) {
-                            for (int row = 0; row < dstH; row++) {
-                                const uint8_t* src = sy + (size_t)(dstH - 1 - row) * dstW;
-                                uint8_t* dst = (uint8_t*)y + (size_t)row * yStride;
-                                for (int col = 0; col < dstW; col++) {
-                                    dst[col] = src[dstW - 1 - col];
-                                }
-                            }
-                            for (int row = 0; row < ch; row++) {
-                                for (int col = 0; col < cw; col++) {
-                                    size_t dst = (size_t)row * cStride + (size_t)col * chromaStep;
-                                    int srcRow = ch - 1 - row;
-                                    int srcCol = cw - 1 - col;
-                                    du[dst] = su[(size_t)srcRow * (dstW / 2) + srcCol];
-                                    dv[dst] = sv[(size_t)srcRow * (dstW / 2) + srcCol];
-                                }
-                            }
-                        } else {
-                            for (int row = 0; row < dstH; row++) {
-                                std::memcpy((uint8_t*)y + (size_t)row * yStride,
-                                            sy + (size_t)row * dstW, (size_t)dstW);
-                            }
-                            for (int row = 0; row < ch; row++) {
-                                for (int col = 0; col < cw; col++) {
-                                    size_t dst = (size_t)row * cStride + (size_t)col * chromaStep;
-                                    du[dst] = su[(size_t)row * (dstW / 2) + col];
-                                    dv[dst] = sv[(size_t)row * (dstW / 2) + col];
-                                }
+                        for (int row = 0; row < dstH; ++row) {
+                            std::memcpy((uint8_t*)y + (size_t)row * yStride,
+                                        sy + (size_t)row * dstW, (size_t)dstW);
+                        }
+                        for (int row = 0; row < ch; ++row) {
+                            for (int col = 0; col < cw; ++col) {
+                                size_t dst = (size_t)row * cStride + (size_t)col * chromaStep;
+                                du[dst] = su[(size_t)row * (dstW / 2) + col];
+                                dv[dst] = sv[(size_t)row * (dstW / 2) + col];
                             }
                         }
                         return true;
