@@ -2615,6 +2615,9 @@ struct portal_frame_hdr {
     /* 消费端（HAL）回写的**拍照请求序号**：HAL 在 `process_capture_request` 里发现 BLOB 流
      * 就 +1，通知 app"现在就编一张"（按需编码，避免周期性 5 MP 重活拖慢热路径） */
     uint32_t photo_req_seq;
+    /* 槽级发布序号：producer 每写完一个槽后写这里；HAL 读取前后都校验，
+     * 避免 slot 被下一轮覆盖时把半帧拷进相机 buffer。 */
+    uint32_t slot_seq[8];
 };
 
 static int g_fsrc_fd = -1;
@@ -2774,7 +2777,7 @@ static const uint8_t *portal_fsrc_pick(void) {
             if (idx >= slots) idx = 0;
             /* 数据写完后生产者再写 publish_idx；如果消费端抢先看到 seq，
              * 这一帧还不完整，继续用上一张，避免读到写了一半的槽造成撕裂。 */
-            if (h->publish_idx != idx) {
+            if (h->publish_idx != idx || h->slot_seq[idx] != seq) {
                 if (g_fsrc_cur != NULL) return g_fsrc_cur;
                 return NULL;
             }

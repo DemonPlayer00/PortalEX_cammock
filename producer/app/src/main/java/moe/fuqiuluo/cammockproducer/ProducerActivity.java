@@ -25,7 +25,7 @@ import java.util.Arrays;
 public class ProducerActivity extends Activity {
     static final String TAG = "CammockProducer";
     static final String PATH = "/data/local/tmp/portalex/cammock.frames";
-    static final int HDR = 4096, SLOTS = 3, SLOT_BYTES = 4 * 1024 * 1024;
+    static final int HDR = 4096, SLOTS = 4, SLOT_BYTES = 3 * 1024 * 1024;
     static final int MAGIC = 0x46584550, VERSION = 1;
     volatile boolean running = true;
     Thread worker;
@@ -241,9 +241,12 @@ public class ProducerActivity extends Activity {
                         map.putInt(16, iw); map.putInt(20, iw); map.putInt(24, 0);
                         map.putInt(28, SLOT_BYTES); map.putInt(32, SLOTS);
                         map.putInt(36, 1); map.putInt(44, slot);
-                        map.putInt(40, ++seq);
-                        // publish 屏障：HAL 只在 seq 与 publish_idx 同时匹配时读取该槽。
+                        int published = ++seq;
+                        // 槽级序号先于全局 seq 发布；HAL 会双检查，避免半帧。
+                        map.putInt(108 + slot * 4, published);
                         map.putInt(52, slot);
+                        // 最后发布全局 seq：这是消费端唯一的新帧信号。
+                        map.putInt(40, published);
                         int req = map.getInt(104);
                         if (req > 0 && req != photoReq) {
                             photoReq = req;
