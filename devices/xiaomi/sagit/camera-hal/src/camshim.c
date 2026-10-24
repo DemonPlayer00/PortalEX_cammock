@@ -2361,14 +2361,6 @@ static void portal_scrub_streams(void *stream_list) {
                  st->format, st->width, st->height, st->usage);
             continue;
         }
-        /* MI6 的 640x480 format=0x22 小预览流不一定出现在 request/result
-         * 的 output_buffers 里（真实 HAL 自己消费）；清 UBWC 后 ISP 仍按平铺写，
-         * 就会留下规则网格绿屏。没有注入路径的小规格 PRIVATE 流保留厂商分配。 */
-        if (f == 0x22 && st->width <= 1280u && st->height <= 720u) {
-            LOGI("小规格 PRIVATE 流（format=0x%x %ux%u）保留 UBWC：无注入路径",
-                 f, st->width, st->height);
-            continue;
-        }
         uint32_t before = st->usage;
         st->usage |= PORTAL_ADD_SW_USAGE;
         /* BLOB（0x21）是线性字节块，没有平铺问题 ⇒ 只补写位、不动 UBWC；
@@ -3303,19 +3295,30 @@ static bool inject_into_buffer(const camera3_stream_buffer_t *sb, uint32_t frame
     }
     uint32_t w = st->width, h = st->height;
     if (w == 0 || h == 0 || w > 8192u || h > 8192u) return false;
+    bool small = w <= 1280u && h <= 720u;
+    if (small) {
+        LOGI("小流注入尝试：format=0x%x %ux%u usage=0x%x type=%d", format, w, h, st->usage,
+             st->stream_type);
+    }
     /* 录像编码器流不写：见 PORTAL_GRALLOC_USAGE_HW_VIDEO_ENCODER 的注释 */
-    if ((st->usage & PORTAL_GRALLOC_USAGE_HW_VIDEO_ENCODER) != 0) return false;
+    if ((st->usage & PORTAL_GRALLOC_USAGE_HW_VIDEO_ENCODER) != 0) {
+        if (small) LOGI("小流跳过：带 HW_VIDEO_ENCODER usage=0x%x", st->usage);
+        return false;
+    }
 
     if (!portal_cpu_writable(st)) {
         /* 保命门：HW-only 的流绝不尝试 CPU 映射（会 abort 掉 provider，实测） */
         PORTAL_LOG_ONCE(
             LOGI, "输出流 format=0x%x usage=0x%x 无 SW 写位 → 跳过注入（需 usage_patch=1）", format,
             st->usage);
+        if (small) LOGI("小流跳过：无 SW 写位 usage=0x%x", st->usage);
         return false;
     }
     void *handle = *sb->buffer;
     if ((uintptr_t)handle < 0x1000u) return false;
-    return portal_write_frame(handle, w, h, frame, sb->acquire_fence);
+    bool ok = portal_write_frame(handle, w, h, frame, sb->acquire_fence);
+    if (small) LOGI("小流注入结果：format=0x%x %ux%u ok=%d", format, w, h, ok ? 1 : 0);
+    return ok;
 }
 
 /** 我们给 HAL 的回调表：先注入，再交给框架 */
