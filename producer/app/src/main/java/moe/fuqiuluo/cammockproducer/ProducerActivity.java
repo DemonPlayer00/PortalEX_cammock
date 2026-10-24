@@ -30,6 +30,10 @@ public class ProducerActivity extends Activity {
     volatile boolean running = true;
     Thread worker;
     int photoReq = 0, photoSeq = 0;
+    /** 复用 NV21 目标缓冲，避免 30fps 下每秒分配/清零约 90MiB。 */
+    private byte[] nv21Buf;
+    private byte[] urowBuf;
+    private byte[] vrowBuf;
 
     @Override public void onCreate(Bundle b) {
         super.onCreate(b);
@@ -89,9 +93,14 @@ public class ProducerActivity extends Activity {
         return out;
     }
 
-    static byte[] toNv21(Image img) {
+    byte[] toNv21(Image img) {
         int w = img.getWidth(), h = img.getHeight();
-        byte[] nv21 = new byte[w * h * 3 / 2];
+        int need = w * h * 3 / 2;
+        byte[] nv21 = nv21Buf;
+        if (nv21 == null || nv21.length != need) {
+            nv21 = new byte[need];
+            nv21Buf = nv21;
+        }
         Image.Plane[] planes = img.getPlanes();
         Image.Plane yp = planes[0], up = planes[1], vp = planes[2];
         ByteBuffer yb = yp.getBuffer(), ub = up.getBuffer(), vb = vp.getBuffer();
@@ -115,8 +124,11 @@ public class ProducerActivity extends Activity {
         int uw = w / 2, uh = h / 2;
         int ups = up.getPixelStride(), vps = vp.getPixelStride();
         int urs = up.getRowStride(), vrs = vp.getRowStride();
-        byte[] urow = new byte[Math.max(1, uw * ups)];
-        byte[] vrow = new byte[Math.max(1, uw * vps)];
+        int urowNeed = Math.max(1, uw * ups);
+        int vrowNeed = Math.max(1, uw * vps);
+        if (urowBuf == null || urowBuf.length != urowNeed) urowBuf = new byte[urowNeed];
+        if (vrowBuf == null || vrowBuf.length != vrowNeed) vrowBuf = new byte[vrowNeed];
+        byte[] urow = urowBuf, vrow = vrowBuf;
         int out = w * h;
         for (int y = 0; y < uh; y++) {
             int uo = y * urs, vo = y * vrs;
@@ -192,7 +204,9 @@ public class ProducerActivity extends Activity {
         try { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY); } catch (Throwable ignored) {}
         String path = findVideo(requested);
         if (path == null) { Log.e(TAG, "no video in cammock library"); finish(); return; }
-        final long frameIntervalNs = 1_000_000_000L / 30L;
+        // 源视频平均约 12.6fps；系统相机请求通常 10~12fps。30fps 只增加
+        // 解码、NV21 转换和写槽成本，不提供可见收益。
+        final long frameIntervalNs = 1_000_000_000L / 15L;
         long nextFrameNs = 0L;
         Log.i(TAG, "decode " + path);
         try (RandomAccessFile raf = new RandomAccessFile(PATH, "rw");

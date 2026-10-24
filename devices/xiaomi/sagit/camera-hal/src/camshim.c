@@ -2818,6 +2818,10 @@ static const uint8_t *portal_fsrc_pick(void) {
 struct portal_scale_maps {
     uint32_t *rows; /* 目标行 → 源行 */
     uint32_t *cols; /* 目标列 → 源列 */
+    /* rotate 时每个目标列对应的源行基址；内层循环只做加法，不再逐像素乘法。 */
+    size_t *offsets;
+    size_t src_stride;
+    bool rotate;
     uint32_t sw, sh, dw, dh;
 };
 /*
@@ -2830,12 +2834,14 @@ static struct portal_scale_maps g_scale[2][PORTAL_SCALE_CACHE];
 static int g_scale_count[2] = {0, 0};
 
 static struct portal_scale_maps *portal_build_maps(int slot, uint32_t sw, uint32_t sh,
-                                                   uint32_t dw, uint32_t dh) {
+                                                   uint32_t dw, uint32_t dh,
+                                                   size_t src_stride, bool rotate) {
     const int plane = slot & 1;
     for (int i = 0; i < g_scale_count[plane]; i++) {
         struct portal_scale_maps *cached = &g_scale[plane][i];
         if (cached->rows != NULL && cached->sw == sw && cached->sh == sh &&
-            cached->dw == dw && cached->dh == dh) {
+            cached->dw == dw && cached->dh == dh && cached->src_stride == src_stride &&
+            cached->rotate == rotate) {
             return cached;
         }
     }
@@ -2847,8 +2853,10 @@ static struct portal_scale_maps *portal_build_maps(int slot, uint32_t sw, uint32
     }
     free(m->rows);
     free(m->cols);
+    free(m->offsets);
     m->rows = NULL;
     m->cols = NULL;
+    m->offsets = NULL;
     if (sw == 0 || sh == 0 || dw == 0 || dh == 0) return NULL;
 
     uint32_t *rows = (uint32_t *)malloc(sizeof(uint32_t) * dh);
@@ -2887,6 +2895,16 @@ static struct portal_scale_maps *portal_build_maps(int slot, uint32_t sw, uint32
     }
     m->rows = rows;
     m->cols = cols;
+    if (rotate) {
+        m->offsets = (size_t *)malloc(sizeof(size_t) * dw);
+        if (m->offsets != NULL) {
+            for (uint32_t dx = 0; dx < dw; dx++) {
+                m->offsets[dx] = (size_t)(sw - 1u - cols[dx]) * src_stride;
+            }
+        }
+    }
+    m->src_stride = src_stride;
+    m->rotate = rotate;
     m->sw = sw;
     m->sh = sh;
     m->dw = dw;
@@ -2936,17 +2954,18 @@ static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uin
             return false;
         }
     } else {
-        if (g_fsrc_last_good_cap < hdr->slot_bytes) {
-            uint8_t *p = (uint8_t *)realloc(g_fsrc_last_good, hdr->slot_bytes);
-            if (p == NULL) return false;
-            g_fsrc_last_good = p;
-            g_fsrc_last_good_cap = hdr->slot_bytes;
-        }
-        memcpy(g_fsrc_last_good, g_fsrc_snapshot, hdr->slot_bytes);
+        /* 不再复制第二遍：把刚校验通过的 snapshot 与 last_good 指针交换，
+         * last_good 保留上一张完整帧；否则每帧要多搬 3 MiB。 */
+        uint8_t *old_last = g_fsrc_last_good;
+        size_t old_last_cap = g_fsrc_last_good_cap;
+        g_fsrc_last_good = g_fsrc_snapshot;
+        g_fsrc_last_good_cap = g_fsrc_snapshot_cap;
+        g_fsrc_snapshot = old_last;
+        g_fsrc_snapshot_cap = old_last_cap;
         g_fsrc_last_w = sw; g_fsrc_last_h = sh;
         g_fsrc_last_sy = sy; g_fsrc_last_suv = suv;
         g_fsrc_last_valid = true;
-        src = g_fsrc_snapshot;
+        src = g_fsrc_last_good;
     }
     if (sw != w || sh != h) {
         PORTAL_LOG_ONCE(LOGI, "源帧 %ux%u 与流 %ux%u 不同：在 HAL 内做 cover 缩放", sw, sh, w, h);
@@ -2962,18 +2981,28 @@ static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uin
     const uint32_t rh = CAMMOCK_ROTATE_RIGHT ? sw : sh;
     /* 旋转后的坐标走预计算 map：逐像素 64 位除法是 1600 预览每帧
      * ~150ms 的主因。 */
-    struct portal_scale_maps *ymap = portal_build_maps(0, rw, rh, w, h);
+    struct portal_scale_maps *ymap = portal_build_maps(0, rw, rh, w, h, sy, true);
     if (ymap != NULL) {
         const uint32_t *rows = ymap->rows;
         const uint32_t *cols = ymap->cols;
-        for (uint32_t y = 0; y < h; y++) {
-            uint32_t ry = rows[y];
-            uint8_t *drow = dy + (size_t)y * dystride;
-            for (uint32_t x = 0; x < w; x++) {
-                uint32_t rx = cols[x];
-                uint32_t sx = CAMMOCK_ROTATE_RIGHT ? ry : sw - 1u - ry;
-                uint32_t syy = CAMMOCK_ROTATE_RIGHT ? sh - 1u - rx : rx;
-                drow[x] = src[(size_t)syy * sy + sx];
+        if (ymap->rotate && ymap->offsets != NULL) {
+            for (uint32_t y = 0; y < h; y++) {
+                uint32_t ry = rows[y];
+                uint8_t *drow = dy + (size_t)y * dystride;
+                const uint8_t *base = src + ry;
+                const size_t *off = ymap->offsets;
+                for (uint32_t x = 0; x < w; x++) drow[x] = base[off[x]];
+            }
+        } else {
+            for (uint32_t y = 0; y < h; y++) {
+                uint32_t ry = rows[y];
+                uint8_t *drow = dy + (size_t)y * dystride;
+                for (uint32_t x = 0; x < w; x++) {
+                    uint32_t rx = cols[x];
+                    uint32_t sx = CAMMOCK_ROTATE_RIGHT ? ry : sw - 1u - ry;
+                    uint32_t syy = CAMMOCK_ROTATE_RIGHT ? sh - 1u - rx : rx;
+                    drow[x] = src[(size_t)syy * sy + sx];
+                }
             }
         }
     } else {
@@ -3000,7 +3029,7 @@ static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uin
     uint32_t cw = w / 2, ch = h / 2;
     if (cw == 0 || ch == 0) return true;
     const uint32_t rwc = rw / 2, rhc = rh / 2;
-    struct portal_scale_maps *cmap = portal_build_maps(1, rwc, rhc, cw, ch);
+    struct portal_scale_maps *cmap = portal_build_maps(1, rwc, rhc, cw, ch, suv, true);
     for (uint32_t y = 0; y < ch; y++) {
         uint32_t ry = cmap ? cmap->rows[y] : (uint32_t)((uint64_t)y * rhc / ch);
         for (uint32_t x = 0; x < cw; x++) {
