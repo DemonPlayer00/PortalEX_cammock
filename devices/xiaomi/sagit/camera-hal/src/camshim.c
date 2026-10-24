@@ -3371,13 +3371,23 @@ static void portal_process_capture_result(const camera3_callback_ops_t *ops,
                 for (uint32_t i = 0; i < snap->num; i++) {
                     const camera3_stream_buffer_t *sb = &snap->sbs[i];
                     if (sb->stream == NULL || sb->buffer == NULL) continue;
-                    if (portal_result_has_buffer(&L, *sb->buffer)) continue;
+                    /* 小规格（<=1280x720）即使 result 里出现，也再补一次：
+                     * 它最容易因 result 回调早于 ISP 最后落图而闪绿；补写发生在真实
+                     * result 之后，重复写同一帧内容比留下未初始化 UBWC 更安全。
+                     * 大流仍只补 result 缺失项，避免无谓的 4K 双写。 */
+                    bool small = sb->stream->width <= 1280u && sb->stream->height <= 720u;
+                    if (!small && portal_result_has_buffer(&L, *sb->buffer)) continue;
                     if (sb->stream->format == 0x21) {
                         if (sb->status == 0 && portal_write_photo(sb)) wrote = true;
                     } else if (inject_into_buffer(sb, frame_no)) {
                         wrote = true;
-                        PORTAL_LOG_ONCE(LOGI, "补写 result 缺失流：format=0x%x %ux%u",
-                                        sb->stream->format, sb->stream->width, sb->stream->height);
+                        if (small) {
+                            PORTAL_LOG_ONCE(LOGI, "补写小流：format=0x%x %ux%u",
+                                            sb->stream->format, sb->stream->width, sb->stream->height);
+                        } else {
+                            PORTAL_LOG_ONCE(LOGI, "补写 result 缺失流：format=0x%x %ux%u",
+                                            sb->stream->format, sb->stream->width, sb->stream->height);
+                        }
                     }
                 }
                 portal_drop_request_snapshot(frame_no);
