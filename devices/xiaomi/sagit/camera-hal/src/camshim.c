@@ -3312,10 +3312,6 @@ static bool inject_into_buffer(const camera3_stream_buffer_t *sb, uint32_t frame
     uint32_t w = st->width, h = st->height;
     if (w == 0 || h == 0 || w > 8192u || h > 8192u) return false;
     bool small = w <= 1280u && h <= 720u;
-    if (small) {
-        LOGI("小流注入尝试：format=0x%x %ux%u usage=0x%x type=%d", format, w, h, st->usage,
-             st->stream_type);
-    }
     /* 录像编码器流不写：见 PORTAL_GRALLOC_USAGE_HW_VIDEO_ENCODER 的注释 */
     if ((st->usage & PORTAL_GRALLOC_USAGE_HW_VIDEO_ENCODER) != 0) {
         if (small) LOGI("小流跳过：带 HW_VIDEO_ENCODER usage=0x%x", st->usage);
@@ -3333,7 +3329,7 @@ static bool inject_into_buffer(const camera3_stream_buffer_t *sb, uint32_t frame
     void *handle = *sb->buffer;
     if ((uintptr_t)handle < 0x1000u) return false;
     bool ok = portal_write_frame(handle, w, h, frame, sb->acquire_fence);
-    if (small) LOGI("小流注入结果：format=0x%x %ux%u ok=%d", format, w, h, ok ? 1 : 0);
+    if (!ok) PORTAL_LOG_ONCE(LOGI, "小流注入失败：format=0x%x %ux%u", format, w, h);
     return ok;
 }
 
@@ -3403,7 +3399,7 @@ static void portal_process_capture_result(const camera3_callback_ops_t *ops,
                      * result 之后，重复写同一帧内容比留下未初始化 UBWC 更安全。
                      * 大流仍只补 result 缺失项，避免无谓的 4K 双写。 */
                     bool small = sb->stream->width <= 1280u && sb->stream->height <= 720u;
-                    if (!small && portal_result_has_buffer(&L, *sb->buffer)) continue;
+                    if (portal_result_has_buffer(&L, *sb->buffer)) continue;
                     if (sb->stream->format == 0x21) {
                         if (sb->status == 0 && portal_write_photo(sb)) wrote = true;
                     } else if (inject_into_buffer(sb, frame_no)) {

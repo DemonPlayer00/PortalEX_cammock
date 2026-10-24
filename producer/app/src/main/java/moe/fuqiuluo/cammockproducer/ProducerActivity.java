@@ -10,6 +10,7 @@ import android.graphics.YuvImage;
 import java.io.ByteArrayOutputStream;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 
@@ -41,13 +42,21 @@ public class ProducerActivity extends Activity {
             return;
         }
         String video = getIntent().getStringExtra("video");
+        // 后台 Activity 会被降成 cached（实测解码降到 1.5fps）；前台 Service 只保活优先级。
+        Intent svc = new Intent(this, ProducerService.class);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(svc);
+        else startService(svc);
         worker = new Thread(() -> decodeLoop(video), "cammock-producer");
         worker.start();
         // 不抢占 PortalEX UI；解码线程继续运行，Activity 退到后台。
         moveTaskToBack(true);
     }
 
-    @Override protected void onDestroy() { running = false; super.onDestroy(); }
+    @Override protected void onDestroy() {
+        running = false;
+        stopService(new Intent(this, ProducerService.class));
+        super.onDestroy();
+    }
 
     String findVideo(String requested) {
         if (requested != null && new File(requested).isFile()) return requested;
@@ -86,21 +95,43 @@ public class ProducerActivity extends Activity {
         Image.Plane[] planes = img.getPlanes();
         Image.Plane yp = planes[0], up = planes[1], vp = planes[2];
         ByteBuffer yb = yp.getBuffer(), ub = up.getBuffer(), vb = vp.getBuffer();
-        int pos = 0;
-        for (int y = 0; y < h; y++) {
-            int row = y * yp.getRowStride();
-            for (int x = 0; x < w; x++) nv21[pos++] = yb.get(row + x * yp.getPixelStride());
+        int yps = yp.getPixelStride(), yrs = yp.getRowStride();
+        // 逐字节 ByteBuffer.get() 在 1088x1920 上要 200 万次调用，是解码线程
+        // 只有约 4fps 的主因；Y 平面按行批量 get，UV 只做半分辨率行内交织。
+        if (yps == 1) {
+            for (int y = 0; y < h; y++) {
+                int off = y * yrs;
+                if (off + w > yb.capacity()) break;
+                yb.position(off);
+                yb.get(nv21, y * w, w);
+            }
+        } else {
+            int pos = 0;
+            for (int y = 0; y < h; y++) {
+                int row = y * yrs;
+                for (int x = 0; x < w; x++) nv21[pos++] = yb.get(row + x * yps);
+            }
         }
-        for (int y = 0; y < h / 2; y++) {
-            int rowU = y * up.getRowStride(), rowV = y * vp.getRowStride();
-            for (int x = 0; x < w / 2; x++) {
-                nv21[pos++] = vb.get(rowV + x * vp.getPixelStride());
-                nv21[pos++] = ub.get(rowU + x * up.getPixelStride());
+        int uw = w / 2, uh = h / 2;
+        int ups = up.getPixelStride(), vps = vp.getPixelStride();
+        int urs = up.getRowStride(), vrs = vp.getRowStride();
+        byte[] urow = new byte[Math.max(1, uw * ups)];
+        byte[] vrow = new byte[Math.max(1, uw * vps)];
+        int out = w * h;
+        for (int y = 0; y < uh; y++) {
+            int uo = y * urs, vo = y * vrs;
+            if (uo + urow.length > ub.capacity() || vo + vrow.length > vb.capacity()) break;
+            ub.position(uo);
+            ub.get(urow, 0, urow.length);
+            vb.position(vo);
+            vb.get(vrow, 0, vrow.length);
+            for (int x = 0; x < uw; x++) {
+                nv21[out++] = vrow[x * vps];
+                nv21[out++] = urow[x * ups];
             }
         }
         return nv21;
     }
-
     static byte[] rotate180(byte[] src, int w, int h) {
         int ySize = w * h, uvSize = w * h / 2;
         byte[] out = new byte[src.length];
@@ -158,8 +189,11 @@ public class ProducerActivity extends Activity {
     }
 
     void decodeLoop(String requested) {
+        try { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY); } catch (Throwable ignored) {}
         String path = findVideo(requested);
         if (path == null) { Log.e(TAG, "no video in cammock library"); finish(); return; }
+        final long frameIntervalNs = 1_000_000_000L / 30L;
+        long nextFrameNs = 0L;
         Log.i(TAG, "decode " + path);
         try (RandomAccessFile raf = new RandomAccessFile(PATH, "rw");
              FileChannel ch = raf.getChannel()) {
@@ -214,6 +248,15 @@ public class ProducerActivity extends Activity {
                         if (seq == 1 || seq % 30 == 0) Log.i(TAG, "frame " + seq + " " + iw + "x" + ih);
                     }
                     codec.releaseOutputBuffer(out, false);
+                    long nowNs = android.os.SystemClock.elapsedRealtimeNanos();
+                    if (nextFrameNs == 0L) nextFrameNs = nowNs;
+                    nextFrameNs += frameIntervalNs;
+                    long waitMs = (nextFrameNs - nowNs) / 1_000_000L;
+                    if (waitMs > 0) {
+                        try { Thread.sleep(waitMs); } catch (InterruptedException ignored) {}
+                    } else if (nowNs - nextFrameNs > frameIntervalNs * 4) {
+                        nextFrameNs = nowNs + frameIntervalNs;
+                    }
                     if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
                         ex.seekTo(0, MediaExtractor.SEEK_TO_CLOSEST_SYNC);
                         codec.flush();
