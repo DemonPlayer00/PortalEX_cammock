@@ -2876,22 +2876,33 @@ static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uin
      * 旋转后不能直接 memcpy 源 UV，否则会偏绿/偏紫。 */
     const uint32_t rw = CAMMOCK_ROTATE_RIGHT ? sh : sw;
     const uint32_t rh = CAMMOCK_ROTATE_RIGHT ? sw : sh;
-    for (uint32_t y = 0; y < h; y++) {
-        uint32_t ry = (uint32_t)((uint64_t)y * rh / h);
-        uint8_t *drow = dy + (size_t)y * dystride;
-        for (uint32_t x = 0; x < w; x++) {
-            uint32_t rx = (uint32_t)((uint64_t)x * rw / w);
-            uint32_t sx, syy;
-            if (CAMMOCK_ROTATE_RIGHT) {
-                sx = ry;
-                syy = sh - 1u - rx;
-            } else {
-                sx = sw - 1u - ry;
-                syy = rx;
+    /* 旋转后的坐标走预计算 map：逐像素 64 位除法是 1600 预览每帧
+     * ~150ms 的主因。 */
+    if (portal_build_maps(0, rw, rh, w, h)) {
+        const uint32_t *rows = g_scale[0].rows;
+        const uint32_t *cols = g_scale[0].cols;
+        for (uint32_t y = 0; y < h; y++) {
+            uint32_t ry = rows[y];
+            uint8_t *drow = dy + (size_t)y * dystride;
+            for (uint32_t x = 0; x < w; x++) {
+                uint32_t rx = cols[x];
+                uint32_t sx = CAMMOCK_ROTATE_RIGHT ? ry : sw - 1u - ry;
+                uint32_t syy = CAMMOCK_ROTATE_RIGHT ? sh - 1u - rx : rx;
+                drow[x] = src[(size_t)syy * sy + sx];
             }
-            if (sx >= sw) sx = sw - 1u;
-            if (syy >= sh) syy = sh - 1u;
-            drow[x] = src[(size_t)syy * sy + sx];
+        }
+    } else {
+        for (uint32_t y = 0; y < h; y++) {
+            uint32_t ry = (uint32_t)((uint64_t)y * rh / h);
+            uint8_t *drow = dy + (size_t)y * dystride;
+            for (uint32_t x = 0; x < w; x++) {
+                uint32_t rx = (uint32_t)((uint64_t)x * rw / w);
+                uint32_t sx = CAMMOCK_ROTATE_RIGHT ? ry : sw - 1u - ry;
+                uint32_t syy = CAMMOCK_ROTATE_RIGHT ? sh - 1u - rx : rx;
+                if (sx >= sw) sx = sw - 1u;
+                if (syy >= sh) syy = sh - 1u;
+                drow[x] = src[(size_t)syy * sy + sx];
+            }
         }
     }
 
@@ -2904,10 +2915,11 @@ static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uin
     uint32_t cw = w / 2, ch = h / 2;
     if (cw == 0 || ch == 0) return true;
     const uint32_t rwc = rw / 2, rhc = rh / 2;
+    bool cmap = portal_build_maps(1, rwc, rhc, cw, ch);
     for (uint32_t y = 0; y < ch; y++) {
-        uint32_t ry = (uint32_t)((uint64_t)y * rhc / ch);
+        uint32_t ry = cmap ? g_scale[1].rows[y] : (uint32_t)((uint64_t)y * rhc / ch);
         for (uint32_t x = 0; x < cw; x++) {
-            uint32_t rx = (uint32_t)((uint64_t)x * rwc / cw);
+            uint32_t rx = cmap ? g_scale[1].cols[x] : (uint32_t)((uint64_t)x * rwc / cw);
             uint32_t scx, scy;
             if (CAMMOCK_ROTATE_RIGHT) {
                 scx = ry;
