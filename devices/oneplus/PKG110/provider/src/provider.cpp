@@ -66,7 +66,14 @@ void nh_close(native_handle_t* h) {
 }
 void nh_delete(native_handle_t* h) { free(h); }
 
-constexpr const char* kFakeCameraId = "device@1.1/vendor_qti/1";
+constexpr const char* kFakeCameraIds[] = {
+    "device@1.1/vendor_qti/0",
+    "device@1.1/vendor_qti/1",
+    "device@1.1/vendor_qti/2",
+    "device@1.1/vendor_qti/3",
+    "device@1.1/vendor_qti/4",
+    "device@1.1/vendor_qti/5",
+};
 constexpr uint64_t kPreviewUsage = 0x33 | 0x20000 | 0x40000 | 0x100 | 0x200;
 
 struct Rect {
@@ -1111,13 +1118,16 @@ ndk::ScopedAStatus PortalProvider::getVendorTags(std::vector<VendorTagSection>* 
 }
 
 ndk::ScopedAStatus PortalProvider::getCameraIdList(std::vector<std::string>* out) {
-    *out = {kFakeCameraId};
+    out->clear();
+    for (const char* id : kFakeCameraIds) out->push_back(id);
     return ndk::ScopedAStatus::ok();
 }
 
 ndk::ScopedAStatus PortalProvider::getCameraDeviceInterface(
         const std::string& name, std::shared_ptr<ICameraDevice>* out) {
-    if (name != kFakeCameraId) {
+    bool known = false;
+    for (const char* id : kFakeCameraIds) if (name == id) { known = true; break; }
+    if (!known) {
         return ndk::ScopedAStatus::fromServiceSpecificError(
                 static_cast<int32_t>(EX_ILLEGAL_ARGUMENT));
     }

@@ -48,7 +48,8 @@ ServerSelection selection_request(const std::string& session) {
     socklen_t len = offsetof(sockaddr_un, sun_path) + 1 + std::strlen(kSocketName);
     if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), len) != 0) {
         ::close(fd);
-        return out;
+        LOGI("selection socket unavailable, fallback to selection.txt");
+        return selection_from_file();
     }
     // system_server 选片服务异常时不能把 camera request 永久挂住：
     // 200ms 超时后回退到旧的共享帧路径。
@@ -78,12 +79,13 @@ ServerSelection selection_request(const std::string& session) {
     ::close(fd);
     if (n <= 0) {
         if (out.fd >= 0) ::close(out.fd);
-        return out;
+        return selection_from_file();
     }
     buf[n] = '\0';
     if (std::strncmp(buf, "OK\t", 3) != 0) {
         LOGI("selection: %s", buf);
-        return out;
+        if (out.fd >= 0) ::close(out.fd);
+        return selection_from_file();
     }
     char* save = nullptr;
     char* tok = strtok_r(buf + 3, "\t\n", &save);
