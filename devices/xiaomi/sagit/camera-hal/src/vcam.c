@@ -631,6 +631,10 @@ static void *g_cammock_map = MAP_FAILED;
 static size_t g_cammock_len = 0;
 static uint32_t g_cammock_last_seq = 0;
 
+/* cammock 素材方向修正：MI6 摄像头调用方需要把源画面顺时针 90°。
+ * 这是设备事实（用户实测“脖子朝左”），不是通用转码；不要把此值复制到 OnePlus。 */
+#define CAMMOCK_ROTATE_RIGHT 1
+
 static bool copy_cammock_yuv(uint8_t *base, struct portal_android_ycbcr *yc,
                              uint32_t w, uint32_t h) {
     if (base == NULL || yc == NULL || yc->ystride == 0) return false;
@@ -652,31 +656,56 @@ static bool copy_cammock_yuv(uint8_t *base, struct portal_android_ycbcr *yc,
     size_t off = 4096u + (size_t)idx * slot_bytes;
     if (off + (size_t)ys * sh > g_cammock_len || off + (size_t)ys * sh + (size_t)uvs * (sh / 2) > g_cammock_len) return false;
     const uint8_t *src = (const uint8_t *)g_cammock_map + off;
-    /* 目标流尺寸可能和视频不同：最近邻缩放，保证视频总能铺满预览。 */
+
+    /* 源是 NV21（VU 交织）。旋转后仍按目标 android_ycbcr 的
+     * cb=U / cr=V 语义写，不能直接照抄 UV 字节序，否则会偏绿/偏紫。 */
+    const uint32_t rw = CAMMOCK_ROTATE_RIGHT ? sh : sw;
+    const uint32_t rh = CAMMOCK_ROTATE_RIGHT ? sw : sh;
     for (uint32_t y = 0; y < h; y++) {
-        uint32_t sy = (uint32_t)((uint64_t)y * sh / h);
-        const uint8_t *row = src + (size_t)sy * ys;
+        uint32_t ry = (uint32_t)((uint64_t)y * rh / h);
         uint8_t *out = base + (size_t)y * yc->ystride;
         for (uint32_t x = 0; x < w; x++) {
-            out[x] = row[(uint32_t)((uint64_t)x * sw / w)];
+            uint32_t rx = (uint32_t)((uint64_t)x * rw / w);
+            uint32_t sx, sy;
+            if (CAMMOCK_ROTATE_RIGHT) {
+                sx = ry;
+                sy = sh - 1u - rx;
+            } else {
+                sx = sw - 1u - ry;
+                sy = rx;
+            }
+            if (sx >= sw) sx = sw - 1u;
+            if (sy >= sh) sy = sh - 1u;
+            out[x] = src[(size_t)sy * ys + sx];
         }
     }
-    if (yc->cb && yc->cr && yc->cstride > 0) {
+
+    if (yc->cb && yc->cr && yc->cstride > 0 && w >= 2 && h >= 2) {
         const uint8_t *uv = src + (size_t)ys * sh;
-        for (uint32_t y = 0; y < h / 2; y++) {
-            uint32_t sy = (uint32_t)((uint64_t)y * (sh / 2) / (h / 2));
-            for (uint32_t x = 0; x < w / 2; x++) {
-                uint32_t sx = (uint32_t)((uint64_t)x * (sw / 2) / (w / 2));
+        const uint32_t cw = w / 2, ch = h / 2;
+        const uint32_t rwc = rw / 2, rhc = rh / 2;
+        for (uint32_t y = 0; y < ch; y++) {
+            uint32_t ry = (uint32_t)((uint64_t)y * rhc / ch);
+            for (uint32_t x = 0; x < cw; x++) {
+                uint32_t rx = (uint32_t)((uint64_t)x * rwc / cw);
+                uint32_t scx, scy;
+                if (CAMMOCK_ROTATE_RIGHT) {
+                    scx = ry;
+                    scy = (sh / 2) - 1u - rx;
+                } else {
+                    scx = (sw / 2) - 1u - ry;
+                    scy = rx;
+                }
+                if (scx >= sw / 2) scx = (sw / 2) - 1u;
+                if (scy >= sh / 2) scy = (sh / 2) - 1u;
                 size_t di = (size_t)y * yc->cstride + (size_t)x * yc->chroma_step;
-                size_t si = (size_t)sy * uvs + (size_t)sx * 2;
-                ((uint8_t *)yc->cb)[di] = uv[si];
-                ((uint8_t *)yc->cr)[di] = uv[si + 1];
+                size_t si = (size_t)scy * uvs + (size_t)scx * 2;
+                ((uint8_t *)yc->cb)[di] = uv[si + 1]; /* U */
+                ((uint8_t *)yc->cr)[di] = uv[si];     /* V */
             }
         }
     }
-    if (seq != g_cammock_last_seq) {
-        g_cammock_last_seq = seq;
-    }
+    if (seq != g_cammock_last_seq) g_cammock_last_seq = seq;
     return true;
 }
 

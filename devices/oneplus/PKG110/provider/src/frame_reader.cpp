@@ -85,32 +85,71 @@ void refreshGeometry(Map& m) {
 }
 
 // Source is NV21: Y plane at slot, interleaved VU plane after yStride*srcH.
+// OnePlus 摄像头调用方需要把源画面逆时针 90°（与 MI6 相反）；这是设备事实。
+constexpr int kCammockRotate = -1; // -1 = CCW/left, +1 = CW/right
+
+inline void mapCammockLuma(int x, int y, int sw, int sh, int dw, int dh,
+                           int& sx, int& sy) {
+    const int rw = kCammockRotate ? sh : sw;
+    const int rh = kCammockRotate ? sw : sh;
+    const int rx = (int)((int64_t)x * rw / dw);
+    const int ry = (int)((int64_t)y * rh / dh);
+    if (kCammockRotate > 0) { // CW
+        sx = ry;
+        sy = sh - 1 - rx;
+    } else if (kCammockRotate < 0) { // CCW
+        sx = sw - 1 - ry;
+        sy = rx;
+    } else {
+        sx = rx;
+        sy = ry;
+    }
+    sx = std::clamp(sx, 0, sw - 1);
+    sy = std::clamp(sy, 0, sh - 1);
+}
+
 void copyYuvCover(const uint8_t* slot, int sw, int sh, int ys, int uvs,
                   void* outY, void* outCb, void* outCr, size_t oys, size_t ocs,
                   size_t step, int dw, int dh) {
     const uint8_t* srcY = slot;
     const uint8_t* srcUV = slot + (size_t)ys * sh;
-    const int cw = dw / 2, ch = dh / 2;
     for (int y = 0; y < dh; ++y) {
-        int sy = (int)((int64_t)y * sh / dh);
         uint8_t* row = (uint8_t*)outY + (size_t)y * oys;
-        const uint8_t* srow = srcY + (size_t)sy * ys;
         for (int x = 0; x < dw; ++x) {
-            int sx = (int)((int64_t)x * sw / dw);
-            row[x] = srow[sx];
+            int sx, sy;
+            mapCammockLuma(x, y, sw, sh, dw, dh, sx, sy);
+            row[x] = srcY[(size_t)sy * ys + sx];
         }
     }
+    const int cw = dw / 2, ch = dh / 2;
+    const int rwc = (kCammockRotate ? sh : sw) / 2;
+    const int rhc = (kCammockRotate ? sw : sh) / 2;
     for (int y = 0; y < ch; ++y) {
-        int sy = (int)((int64_t)y * (sh / 2) / std::max(1, ch));
+        int ry = (int)((int64_t)y * rhc / std::max(1, ch));
         size_t dst = (size_t)y * ocs;
-        const uint8_t* srow = srcUV + (size_t)sy * uvs;
         for (int x = 0; x < cw; ++x) {
-            int sx = (int)((int64_t)x * (sw / 2) / std::max(1, cw));
-            ((uint8_t*)outCb)[dst + (size_t)x * step] = srow[sx * 2];
-            ((uint8_t*)outCr)[dst + (size_t)x * step] = srow[sx * 2 + 1];
+            int rx = (int)((int64_t)x * rwc / std::max(1, cw));
+            int scx, scy;
+            if (kCammockRotate > 0) {
+                scx = ry;
+                scy = (sh / 2) - 1 - rx;
+            } else if (kCammockRotate < 0) {
+                scx = (sw / 2) - 1 - ry;
+                scy = rx;
+            } else {
+                scx = rx;
+                scy = ry;
+            }
+            scx = std::clamp(scx, 0, sw / 2 - 1);
+            scy = std::clamp(scy, 0, sh / 2 - 1);
+            const uint8_t* srow = srcUV + (size_t)scy * uvs + (size_t)scx * 2;
+            // 源 NV21: srow[0]=V, srow[1]=U；目标语义 cb=U / cr=V
+            ((uint8_t*)outCb)[dst + (size_t)x * step] = srow[1];
+            ((uint8_t*)outCr)[dst + (size_t)x * step] = srow[0];
         }
     }
 }
+
 
 inline void yuvToRgb(int y, int u, int v, uint8_t* out) {
     int c = y - 16, d = u - 128, e = v - 128;
@@ -155,13 +194,14 @@ bool frame_reader_draw_rgb(uint8_t* rgb, int width, int height) {
     const uint8_t* srcY = slot;
     const uint8_t* srcUV = slot + (size_t)m.yStride * m.height;
     for (int y = 0; y < height; ++y) {
-        int sy = (int)((int64_t)y * m.height / height);
         for (int x = 0; x < width; ++x) {
-            int sx = (int)((int64_t)x * m.width / width);
+            int sx, sy;
+            mapCammockLuma(x, y, m.width, m.height, width, height, sx, sy);
             uint8_t yy = srcY[(size_t)sy * m.yStride + sx];
             int cx = sx / 2, cy = sy / 2;
             const uint8_t* uv = srcUV + (size_t)cy * m.uvStride + (size_t)cx * 2;
-            yuvToRgb(yy, uv[0], uv[1], rgb + ((size_t)y * width + x) * 3);
+            // 源 NV21: uv[0]=V, uv[1]=U
+            yuvToRgb(yy, uv[1], uv[0], rgb + ((size_t)y * width + x) * 3);
         }
     }
     return true;
