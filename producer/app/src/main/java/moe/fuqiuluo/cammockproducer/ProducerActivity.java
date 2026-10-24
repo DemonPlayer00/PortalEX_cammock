@@ -242,6 +242,8 @@ public class ProducerActivity extends Activity {
                         map.putInt(28, SLOT_BYTES); map.putInt(32, SLOTS);
                         map.putInt(36, 1); map.putInt(44, slot);
                         map.putInt(40, ++seq);
+                        // publish 屏障：HAL 只在 seq 与 publish_idx 同时匹配时读取该槽。
+                        map.putInt(52, slot);
                         int req = map.getInt(104);
                         if (req > 0 && req != photoReq) {
                             photoReq = req;

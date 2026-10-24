@@ -2598,7 +2598,7 @@ static const uint8_t *portal_template(uint32_t w, uint32_t h, uint32_t frame) {
 
 struct portal_frame_hdr {
     uint32_t magic, version, width, height, y_stride, uv_stride, format, slot_bytes;
-    uint32_t slots, enabled, seq, write_idx, flags, reserved;
+    uint32_t slots, enabled, seq, write_idx, flags, publish_idx;
     uint64_t timestamp_ns;
     /* 以下字段由**消费端（HAL）**回写：app 据此把解码器缩放到相机流真实的几何 */
     uint32_t consumer_w, consumer_h, producer_state, reserved2;
@@ -2772,6 +2772,12 @@ static const uint8_t *portal_fsrc_pick(void) {
             g_fsrc_seq = seq;
             idx = h->write_idx;
             if (idx >= slots) idx = 0;
+            /* 数据写完后生产者再写 publish_idx；如果消费端抢先看到 seq，
+             * 这一帧还不完整，继续用上一张，避免读到写了一半的槽造成撕裂。 */
+            if (h->publish_idx != idx) {
+                if (g_fsrc_cur != NULL) return g_fsrc_cur;
+                return NULL;
+            }
         } else if (g_fsrc_cur != NULL) {
             return g_fsrc_cur; /* 没有新帧：重发上一帧，避免真假画面交替闪 */
         } else {
@@ -2808,25 +2814,38 @@ struct portal_scale_maps {
  * 色度用 (sw/2,sh/2→w/2,h/2) —— 每帧两次调用互相作废对方的缓存，
  * 于是**每帧都重建两张映射表**（日志里 `缩放映射已建立` 每帧刷屏就是证据）。
  */
-static struct portal_scale_maps g_scale[2];
+#define PORTAL_SCALE_CACHE 8
+static struct portal_scale_maps g_scale[2][PORTAL_SCALE_CACHE];
+static int g_scale_count[2] = {0, 0};
 
-static bool portal_build_maps(int slot, uint32_t sw, uint32_t sh, uint32_t dw, uint32_t dh) {
-    struct portal_scale_maps *m = &g_scale[slot & 1];
-    if (m->rows != NULL && m->sw == sw && m->sh == sh && m->dw == dw && m->dh == dh) {
-        return true;
+static struct portal_scale_maps *portal_build_maps(int slot, uint32_t sw, uint32_t sh,
+                                                   uint32_t dw, uint32_t dh) {
+    const int plane = slot & 1;
+    for (int i = 0; i < g_scale_count[plane]; i++) {
+        struct portal_scale_maps *cached = &g_scale[plane][i];
+        if (cached->rows != NULL && cached->sw == sw && cached->sh == sh &&
+            cached->dw == dw && cached->dh == dh) {
+            return cached;
+        }
+    }
+    struct portal_scale_maps *m;
+    if (g_scale_count[plane] < PORTAL_SCALE_CACHE) {
+        m = &g_scale[plane][g_scale_count[plane]++];
+    } else {
+        m = &g_scale[plane][0];
     }
     free(m->rows);
     free(m->cols);
     m->rows = NULL;
     m->cols = NULL;
-    if (sw == 0 || sh == 0 || dw == 0 || dh == 0) return false;
+    if (sw == 0 || sh == 0 || dw == 0 || dh == 0) return NULL;
 
     uint32_t *rows = (uint32_t *)malloc(sizeof(uint32_t) * dh);
     uint32_t *cols = (uint32_t *)malloc(sizeof(uint32_t) * dw);
     if (rows == NULL || cols == NULL) {
         free(rows);
         free(cols);
-        return false;
+        return NULL;
     }
     (void)0;
     /* cover：取较大的放大倍率（宽主导 / 高主导），另一维居中裁剪 */
@@ -2863,7 +2882,7 @@ static bool portal_build_maps(int slot, uint32_t sw, uint32_t sh, uint32_t dw, u
     m->dh = dh;
     LOGI("缩放映射已建立[%s]：%ux%u → %ux%u（cover + 居中裁剪）", (slot & 1) ? "色度" : "亮度", sw,
          sh, dw, dh);
-    return true;
+    return m;
 }
 
 /**
@@ -2894,9 +2913,10 @@ static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uin
     const uint32_t rh = CAMMOCK_ROTATE_RIGHT ? sw : sh;
     /* 旋转后的坐标走预计算 map：逐像素 64 位除法是 1600 预览每帧
      * ~150ms 的主因。 */
-    if (portal_build_maps(0, rw, rh, w, h)) {
-        const uint32_t *rows = g_scale[0].rows;
-        const uint32_t *cols = g_scale[0].cols;
+    struct portal_scale_maps *ymap = portal_build_maps(0, rw, rh, w, h);
+    if (ymap != NULL) {
+        const uint32_t *rows = ymap->rows;
+        const uint32_t *cols = ymap->cols;
         for (uint32_t y = 0; y < h; y++) {
             uint32_t ry = rows[y];
             uint8_t *drow = dy + (size_t)y * dystride;
@@ -2931,11 +2951,11 @@ static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uin
     uint32_t cw = w / 2, ch = h / 2;
     if (cw == 0 || ch == 0) return true;
     const uint32_t rwc = rw / 2, rhc = rh / 2;
-    bool cmap = portal_build_maps(1, rwc, rhc, cw, ch);
+    struct portal_scale_maps *cmap = portal_build_maps(1, rwc, rhc, cw, ch);
     for (uint32_t y = 0; y < ch; y++) {
-        uint32_t ry = cmap ? g_scale[1].rows[y] : (uint32_t)((uint64_t)y * rhc / ch);
+        uint32_t ry = cmap ? cmap->rows[y] : (uint32_t)((uint64_t)y * rhc / ch);
         for (uint32_t x = 0; x < cw; x++) {
-            uint32_t rx = cmap ? g_scale[1].cols[x] : (uint32_t)((uint64_t)x * rwc / cw);
+            uint32_t rx = cmap ? cmap->cols[x] : (uint32_t)((uint64_t)x * rwc / cw);
             uint32_t scx, scy;
             if (CAMMOCK_ROTATE_RIGHT) {
                 scx = ry;
