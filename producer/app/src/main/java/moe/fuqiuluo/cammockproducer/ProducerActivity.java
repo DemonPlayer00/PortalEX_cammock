@@ -233,6 +233,9 @@ public class ProducerActivity extends Activity {
                         byte[] data = toNv21(img);
                         int off = HDR + slot * SLOT_BYTES;
                         map.position(off); map.put(data);
+                        // 心跳必须在数据之后写入：HAL 用 timestamp_ns 判断生产者是否还活着。
+                        // 旧实现从不更新这个字段，5 秒后 HAL 就退回真实相机，画面会出现真图/绿线。
+                        map.putLong(56, android.os.SystemClock.elapsedRealtimeNanos());
                         map.putInt(0, MAGIC); map.putInt(4, VERSION);
                         map.putInt(8, iw); map.putInt(12, ih);
                         map.putInt(16, iw); map.putInt(20, iw); map.putInt(24, 0);
