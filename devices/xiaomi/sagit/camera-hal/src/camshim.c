@@ -2986,12 +2986,17 @@ static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uin
         const uint32_t *rows = ymap->rows;
         const uint32_t *cols = ymap->cols;
         if (ymap->rotate && ymap->offsets != NULL) {
-            for (uint32_t y = 0; y < h; y++) {
-                uint32_t ry = rows[y];
-                uint8_t *drow = dy + (size_t)y * dystride;
-                const uint8_t *base = src + ry;
-                const size_t *off = ymap->offsets;
-                for (uint32_t x = 0; x < w; x++) drow[x] = base[off[x]];
+            const uint32_t TILE = 8;
+            for (uint32_t y = 0; y < h; y += TILE) {
+                uint32_t n = h - y < TILE ? h - y : TILE;
+                uint32_t ryv[TILE];
+                for (uint32_t k = 0; k < n; k++) ryv[k] = rows[y + k];
+                for (uint32_t x = 0; x < w; x++) {
+                    size_t off = ymap->offsets[x];
+                    for (uint32_t k = 0; k < n; k++) {
+                        dy[(size_t)(y + k) * dystride + x] = src[off + ryv[k]];
+                    }
+                }
             }
         } else {
             for (uint32_t y = 0; y < h; y++) {
@@ -3030,26 +3035,43 @@ static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uin
     if (cw == 0 || ch == 0) return true;
     const uint32_t rwc = rw / 2, rhc = rh / 2;
     struct portal_scale_maps *cmap = portal_build_maps(1, rwc, rhc, cw, ch, suv, true);
-    for (uint32_t y = 0; y < ch; y++) {
-        uint32_t ry = cmap ? cmap->rows[y] : (uint32_t)((uint64_t)y * rhc / ch);
-        for (uint32_t x = 0; x < cw; x++) {
-            uint32_t rx = cmap ? cmap->cols[x] : (uint32_t)((uint64_t)x * rwc / cw);
-            uint32_t scx, scy;
-            if (CAMMOCK_ROTATE_RIGHT) {
-                scx = ry;
-                scy = (sh / 2) - 1u - rx;
-            } else {
-                scx = (sw / 2) - 1u - ry;
-                scy = rx;
+    if (cmap && cmap->rotate && cmap->offsets != NULL) {
+        const uint32_t TILE = 8;
+        for (uint32_t y = 0; y < ch; y += TILE) {
+            uint32_t n = ch - y < TILE ? ch - y : TILE;
+            uint32_t ryv[TILE];
+            for (uint32_t k = 0; k < n; k++) ryv[k] = cmap->rows[y + k];
+            for (uint32_t x = 0; x < cw; x++) {
+                size_t off = cmap->offsets[x];
+                for (uint32_t k = 0; k < n; k++) {
+                    const uint8_t *sp = suvp + off + (size_t)ryv[k] * 2;
+                    size_t di = (size_t)(y + k) * dcstride + (size_t)x * cstep;
+                    // android_ycbcr 的 cb/cr 已经是语义指针：cb=U、cr=V。
+                    dcb[di] = sp[1]; /* U */
+                    dcr[di] = sp[0]; /* V */
+                }
             }
-            if (scx >= sw / 2) scx = (sw / 2) - 1u;
-            if (scy >= sh / 2) scy = (sh / 2) - 1u;
-            const uint8_t *sp = suvp + (size_t)scy * suv + (size_t)scx * 2;
-            size_t di = (size_t)y * dcstride + (size_t)x * cstep;
-            // android_ycbcr 的 cb/cr 已经是语义指针：cb=U、cr=V。
-            // 不要按“内存里谁在前”再交换一次，否则 NV21(V前) 会被写反。
-            dcb[di] = sp[1]; /* U */
-            dcr[di] = sp[0]; /* V */
+        }
+    } else {
+        for (uint32_t y = 0; y < ch; y++) {
+            uint32_t ry = cmap ? cmap->rows[y] : (uint32_t)((uint64_t)y * rhc / ch);
+            for (uint32_t x = 0; x < cw; x++) {
+                uint32_t rx = cmap ? cmap->cols[x] : (uint32_t)((uint64_t)x * rwc / cw);
+                uint32_t scx, scy;
+                if (CAMMOCK_ROTATE_RIGHT) {
+                    scx = ry;
+                    scy = (sh / 2) - 1u - rx;
+                } else {
+                    scx = (sw / 2) - 1u - ry;
+                    scy = rx;
+                }
+                if (scx >= sw / 2) scx = (sw / 2) - 1u;
+                if (scy >= sh / 2) scy = (sh / 2) - 1u;
+                const uint8_t *sp = suvp + (size_t)scy * suv + (size_t)scx * 2;
+                size_t di = (size_t)y * dcstride + (size_t)x * cstep;
+                dcb[di] = sp[1]; /* U */
+                dcr[di] = sp[0]; /* V */
+            }
         }
     }
     return true;
