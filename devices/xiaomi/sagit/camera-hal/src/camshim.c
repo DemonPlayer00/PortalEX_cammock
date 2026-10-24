@@ -2873,13 +2873,46 @@ static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uin
             if (scy >= sh / 2) scy = (sh / 2) - 1u;
             const uint8_t *sp = suvp + (size_t)scy * suv + (size_t)scx * 2;
             size_t di = (size_t)y * dcstride + (size_t)x * cstep;
-            const uint8_t u = sp[1]; /* NV21: V,U */
-            const uint8_t v = sp[0];
-            if (dcr == dcb + 1) { /* NV12: U,V */
-                dcb[di] = u; dcr[di] = v;
-            } else { /* NV21 或描述符的 V,U */
-                dcb[di] = v; dcr[di] = u;
-            }
+            // android_ycbcr 的 cb/cr 已经是语义指针：cb=U、cr=V。
+            // 不要按“内存里谁在前”再交换一次，否则 NV21(V前) 会被写反。
+            dcb[di] = sp[1]; /* U */
+            dcr[di] = sp[0]; /* V */
+        }
+    }
+    return true;
+}
+
+/**
+ * PRIVATE/RGBA 预览面：lockYCbCr 失败后只能拿到裸地址，但 MI6 的 640x480 预览
+ * 实际是 RGBA8888 线性面。把外源 NV21 采样后转成 RGBA，避免只写 Y（全屏绿）。
+ */
+static bool portal_fill_rgba_external(uint8_t *dst, uint32_t w, uint32_t h) {
+    const uint8_t *src = portal_fsrc_pick();
+    const struct portal_frame_hdr *hdr = (const struct portal_frame_hdr *)g_fsrc_map;
+    if (src == NULL || hdr == NULL || dst == NULL || w == 0 || h == 0) return false;
+    const uint32_t sw = hdr->width, sh = hdr->height, sy = hdr->y_stride, suv = hdr->uv_stride;
+    if (sw == 0 || sh == 0 || sy < sw || suv < sw) return false;
+    const uint32_t rw = sh, rh = sw; /* MI6 固定顺时针 90° */
+    const uint8_t *uv = src + (size_t)sy * sh;
+    for (uint32_t y = 0; y < h; y++) {
+        uint32_t ry = (uint32_t)((uint64_t)y * rh / h);
+        for (uint32_t x = 0; x < w; x++) {
+            uint32_t rx = (uint32_t)((uint64_t)x * rw / w);
+            uint32_t sx = ry;
+            uint32_t syy = sh - 1u - rx;
+            if (sx >= sw) sx = sw - 1u;
+            if (syy >= sh) syy = sh - 1u;
+            int yy = src[(size_t)syy * sy + sx] - 16;
+            int u = uv[(size_t)(syy / 2) * suv + (size_t)(sx / 2) * 2 + 1] - 128;
+            int v = uv[(size_t)(syy / 2) * suv + (size_t)(sx / 2) * 2] - 128;
+            int r = (298 * yy + 409 * v + 128) >> 8;
+            int g = (298 * yy - 100 * u - 208 * v + 128) >> 8;
+            int b = (298 * yy + 516 * u + 128) >> 8;
+            uint8_t *p = dst + ((size_t)y * w + x) * 4;
+            p[0] = (uint8_t)(r < 0 ? 0 : (r > 255 ? 255 : r));
+            p[1] = (uint8_t)(g < 0 ? 0 : (g > 255 ? 255 : g));
+            p[2] = (uint8_t)(b < 0 ? 0 : (b > 255 ? 255 : b));
+            p[3] = 255;
         }
     }
     return true;
@@ -2932,6 +2965,7 @@ struct portal_map {
     uint8_t *y, *cb, *cr;
     size_t ystride, cstride, chroma_step;
     bool used;
+    bool rgba; /* lock() 兜底：这块 PRIVATE buffer 实际是 RGBA，不能按 YUV 写 */
 };
 
 #define PORTAL_MAP_SLOTS 8
@@ -2972,6 +3006,7 @@ static struct portal_map *portal_get_map(void *handle, uint32_t w, uint32_t h) {
             free_slot->cstride = yc.cstride;
             free_slot->chroma_step = yc.chroma_step;
             free_slot->used = true;
+            free_slot->rgba = false;
             return free_slot;
         }
         PORTAL_LOG_ONCE(LOGE, "lockYCbCr 失败 rc=%d（y=%p ystride=%zu）→ 退 lock()", rc, yc.y,
@@ -2994,6 +3029,7 @@ static struct portal_map *portal_get_map(void *handle, uint32_t w, uint32_t h) {
     free_slot->cstride = 0;
     free_slot->chroma_step = 0;
     free_slot->used = true;
+    free_slot->rgba = true;
     return free_slot;
 }
 /** 真的把图案写进去；返回是否成功（阶梯见上方注释） */
@@ -3017,7 +3053,12 @@ static bool portal_write_frame(void *handle, uint32_t w, uint32_t h, uint32_t fr
 
     struct portal_map *m = portal_get_map(handle, w, h);
     if (m == NULL) return false;
-    portal_fill_frame(m->y, m->ystride, m->cb, m->cr, m->cstride, m->chroma_step, w, h, frame);
+    if (m->rgba) {
+        if (!portal_fill_rgba_external(m->y, w, h)) return false;
+        PORTAL_LOG_ONCE(LOGI, "RGBA 预览面：外源帧已转为 RGBA 写入（%ux%u）", w, h);
+    } else {
+        portal_fill_frame(m->y, m->ystride, m->cb, m->cr, m->cstride, m->chroma_step, w, h, frame);
+    }
     portal_count_write(portal_seconds_since(&t0) * 1000.0);
     return true;
 }
