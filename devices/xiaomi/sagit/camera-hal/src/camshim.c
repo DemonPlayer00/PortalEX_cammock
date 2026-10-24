@@ -541,6 +541,8 @@ static int g_opt_inject_byte = 0x80;
  *  那个在本机不可信，§62 请求快照里两个输出打出来是同一个指针）建
  *  `EGL_LINUX_DMA_BUF_EXT` 图像，让 GPU 直接画。 */
 static int g_opt_gpu = 0;
+/** 仅做一次 GPU/EGL/AHardwareBuffer 自检，不接管任何相机 buffer。 */
+static int g_opt_gpu_selftest = 0;
 /** 走 GPU 的那块靶的字节数（0 = 不启用；按尺寸选靶，理由同 mock_map） */
 static unsigned long g_opt_gpu_size = 0;
 /** 那块靶的几何（GPU 需要宽高才能建图像；默认 1080p） */
@@ -1103,6 +1105,8 @@ static void load_options(void) {
             g_opt_probe_size = strtoul(val, NULL, 0);
         } else if (strcmp(key, "gpu") == 0) {
             g_opt_gpu = atoi(val);
+        } else if (strcmp(key, "gpu_selftest") == 0) {
+            g_opt_gpu_selftest = atoi(val);
         } else if (strcmp(key, "gpu_size") == 0) {
             g_opt_gpu_size = strtoul(val, NULL, 0);
         } else if (strcmp(key, "gpu_w") == 0) {
@@ -1441,6 +1445,9 @@ static bool portal_layout_has_blob(const struct portal_layout *L) {
 static void portal_gpu_capture_handle(const camera3_stream_buffer_t *sb);
 /* M2b：登记 GPU 靶的 fd（定义在下方 M2b 段；注入线程认领靶时要用，故前置声明） */
 static void portal_gpu_note_target_fd(int fd);
+#if defined(__aarch64__)
+static void portal_gpu_selftest_own(void);
+#endif
 
 /* 会话几何表 + 自动模板（定义在下方 mock_map 段；请求路径要登记、configure_streams 要清零）。
  * ⚠️ 与注入线程同一处境：那一整段在 `#if defined(__aarch64__)` 里（32 位形态没有按地址挂钩，
@@ -8385,6 +8392,11 @@ static void load_real_hal(void) {
                        (void *)g_real_open, (void *)g_real_process_capture_request,
                        (void *)g_real_initialize, (void *)g_real_configure_streams,
                        (void *)g_real_oplus_info_cb);
+#if defined(__aarch64__)
+    if (g_opt_gpu_selftest) portal_gpu_selftest_own();
+#else
+    if (g_opt_gpu_selftest) LOGI("GPU 自检跳过：MI6 32 位 HAL 没有 aarch64 GPU 实现");
+#endif
     /* 可选：直接在真件 HAL3 入口上挂钩（ACE5 唯一可行的接管面，理由见 g_opt_inline_hook） */
     if (g_opt_hook_vaddrs[0] != '\0') {
         portal_hook_list(g_opt_hook_vaddrs, NULL);
