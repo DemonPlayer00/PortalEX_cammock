@@ -3016,7 +3016,7 @@ struct portal_map {
     size_t rgba_stride; /* RGBA 每行字节数（由 native_handle 的 stride 字段推导） */
 };
 
-#define PORTAL_MAP_SLOTS 8
+#define PORTAL_MAP_SLOTS 32
 static struct portal_map g_maps[PORTAL_MAP_SLOTS];
 
 static void portal_invalidate_maps(void) {
@@ -3119,7 +3119,13 @@ static bool portal_write_frame(void *handle, uint32_t w, uint32_t h, uint32_t fr
     }
 
     struct portal_map *m = portal_get_map(handle, w, h);
-    if (m == NULL) return false;
+    if (m == NULL) {
+        if (w <= 1280u && h <= 720u) {
+            LOGI("小流映射失败：%ux%u（map slots=%d 已满或 lock 失败）", w, h,
+                 PORTAL_MAP_SLOTS);
+        }
+        return false;
+    }
     if (m->rgba) {
         if (!portal_fill_rgba_external(m->y, w, h, m->rgba_stride ? m->rgba_stride : (size_t)w * 4)) return false;
         PORTAL_LOG_ONCE(LOGI, "RGBA 预览面：外源帧已转为 RGBA 写入（%ux%u）", w, h);
