@@ -3154,8 +3154,10 @@ static void portal_wait_fence(int fd) {
     }
     if (g_sync_wait == NULL) return;
     PORTAL_LOG_ONCE(LOGI, "acquire_fence 有效：fd=%d（等它写完再覆盖）", fd);
-    int rc = g_sync_wait(fd, 200);
-    if (rc != 0) PORTAL_LOG_ONCE(LOGI, "acquire_fence 未在 200ms 内就绪 rc=%d（继续写）", rc);
+    // 640x480 小流的 fence 常比 4K 晚；200ms 会让我们在 ISP 落图前覆盖，
+    // 下一帧再被 ISP 覆盖 → 表现为闪烁。放宽到 1s，仍失败才继续写。
+    int rc = g_sync_wait(fd, 1000);
+    if (rc != 0) PORTAL_LOG_ONCE(LOGI, "acquire_fence 未在 1s 内就绪 rc=%d（继续写）", rc);
 }
 
 /* ------------------------------------------------------------------ *
