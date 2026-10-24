@@ -242,8 +242,11 @@ struct Decoder {
             if (ly.load()) {
                 // 按请求方宽高比做 center-crop：不拉伸、不留黑边。
                 // 不读取 rotation-degrees；调用方期望什么宽高比，就裁成什么比例。
-                const int dstAspectNum = dstW;
-                const int dstAspectDen = dstH;
+                // 先按“旋转后的画面”对齐目标宽高比；否则 720x1280 旋转后
+                // 再被直接拉到 1600x1200 会把人物上下拉长。
+                const bool rotQuarter = rotationDegrees == 90 || rotationDegrees == 270;
+                const int dstAspectNum = rotQuarter ? dstH : dstW;
+                const int dstAspectDen = rotQuarter ? dstW : dstH;
                 int cropW = srcW;
                 int cropH = srcH;
                 if (srcW * dstAspectDen > srcH * dstAspectNum) {

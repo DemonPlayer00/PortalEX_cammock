@@ -2848,7 +2848,11 @@ static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uin
         }
     }
 
-    if (dcb == NULL || dcr == NULL || dcstride == 0 || dstep != 2) return true;
+    if (dcb == NULL || dcr == NULL || dcstride == 0) return true;
+    /* 不再要求 dstep==2：部分 MI6 流把 U/V 放在两个平面（step=1）或
+     * 把 chroma_step 报成 0；只写 Y 会让应用一直看到未初始化的绿色 chroma。 */
+    size_t cstep = dstep;
+    if (cstep == 0) cstep = (dcr == dcb + 1 || dcb == dcr + 1) ? 2 : 1;
     const uint8_t *suvp = src + (size_t)sy * sh;
     uint32_t cw = w / 2, ch = h / 2;
     if (cw == 0 || ch == 0) return true;
@@ -2868,7 +2872,7 @@ static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uin
             if (scx >= sw / 2) scx = (sw / 2) - 1u;
             if (scy >= sh / 2) scy = (sh / 2) - 1u;
             const uint8_t *sp = suvp + (size_t)scy * suv + (size_t)scx * 2;
-            size_t di = (size_t)y * dcstride + (size_t)x * dstep;
+            size_t di = (size_t)y * dcstride + (size_t)x * cstep;
             const uint8_t u = sp[1]; /* NV21: V,U */
             const uint8_t v = sp[0];
             if (dcr == dcb + 1) { /* NV12: U,V */
