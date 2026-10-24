@@ -2624,6 +2624,14 @@ static int g_fsrc_fd = -1;
 static uint8_t *g_fsrc_map = NULL;
 static size_t g_fsrc_len = 0;
 static const uint8_t *g_fsrc_cur = NULL; /* 当前使用的槽位（没新帧就沿用） */
+/* HAL 先把源槽快照到私有内存，再画到相机 buffer；源槽被 producer 覆盖时
+ * 快照校验会失败并丢弃这一帧，避免把半帧的绿色 UV 写进预览。 */
+static uint8_t *g_fsrc_snapshot = NULL;
+static size_t g_fsrc_snapshot_cap = 0;
+static uint8_t *g_fsrc_last_good = NULL;
+static size_t g_fsrc_last_good_cap = 0;
+static uint32_t g_fsrc_last_w = 0, g_fsrc_last_h = 0, g_fsrc_last_sy = 0, g_fsrc_last_suv = 0;
+static bool g_fsrc_last_valid = false;
 static uint32_t g_fsrc_sw = 0, g_fsrc_sh = 0, g_fsrc_sy = 0, g_fsrc_suv = 0;
 static uint32_t g_fsrc_seq = 0;
 static uint32_t g_fsrc_cycle = 0;
@@ -2902,6 +2910,44 @@ static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uin
     if (src == NULL || hdr == NULL) return false;
     uint32_t sw = hdr->width, sh = hdr->height, sy = hdr->y_stride, suv = hdr->uv_stride;
     if (sw == 0 || sh == 0 || sy < sw) return false;
+
+    /* 先做完整槽快照，并且前后各校验一次发布序号。直接逐像素读共享槽时，
+     * producer 正好覆盖该槽会把半帧的 UV 写进相机 buffer（绿色竖条纹/闪烁）。 */
+    if (hdr->slot_bytes < 4096) return false;
+    uint32_t picked_seq = hdr->seq;
+    ptrdiff_t raw_idx = (src - g_fsrc_map - PORTAL_FRAME_HDR_BYTES) / hdr->slot_bytes;
+    if (raw_idx < 0 || raw_idx >= hdr->slots) return false;
+    uint32_t picked_idx = (uint32_t)raw_idx;
+    if (hdr->slot_seq[picked_idx] != picked_seq) return false;
+    if (g_fsrc_snapshot_cap < hdr->slot_bytes) {
+        uint8_t *p = (uint8_t *)realloc(g_fsrc_snapshot, hdr->slot_bytes);
+        if (p == NULL) return false;
+        g_fsrc_snapshot = p;
+        g_fsrc_snapshot_cap = hdr->slot_bytes;
+    }
+    memcpy(g_fsrc_snapshot, src, hdr->slot_bytes);
+    if (hdr->seq != picked_seq || hdr->slot_seq[picked_idx] != picked_seq) {
+        /* 复制期间被覆盖：用上一张完整帧，绝不能把未初始化/半帧 buffer 留给驱动。 */
+        if (g_fsrc_last_valid && g_fsrc_last_good_cap >= hdr->slot_bytes) {
+            src = g_fsrc_last_good;
+            sw = g_fsrc_last_w; sh = g_fsrc_last_h;
+            sy = g_fsrc_last_sy; suv = g_fsrc_last_suv;
+        } else {
+            return false;
+        }
+    } else {
+        if (g_fsrc_last_good_cap < hdr->slot_bytes) {
+            uint8_t *p = (uint8_t *)realloc(g_fsrc_last_good, hdr->slot_bytes);
+            if (p == NULL) return false;
+            g_fsrc_last_good = p;
+            g_fsrc_last_good_cap = hdr->slot_bytes;
+        }
+        memcpy(g_fsrc_last_good, g_fsrc_snapshot, hdr->slot_bytes);
+        g_fsrc_last_w = sw; g_fsrc_last_h = sh;
+        g_fsrc_last_sy = sy; g_fsrc_last_suv = suv;
+        g_fsrc_last_valid = true;
+        src = g_fsrc_snapshot;
+    }
     if (sw != w || sh != h) {
         PORTAL_LOG_ONCE(LOGI, "源帧 %ux%u 与流 %ux%u 不同：在 HAL 内做 cover 缩放", sw, sh, w, h);
     }
