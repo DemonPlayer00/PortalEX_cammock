@@ -202,8 +202,17 @@ public class ProducerActivity extends Activity {
 
     void decodeLoop(String requested) {
         try { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY); } catch (Throwable ignored) {}
-        String path = findVideo(requested);
-        if (path == null) { Log.e(TAG, "no video in cammock library"); finish(); return; }
+        // 标准接口：优先向 system_server 请求选片，拿到唯一副本的 fd 与起播时间。
+        SelectionClient.Result selection = SelectionClient.request();
+        String path = selection == null ? findVideo(requested) : null;
+        if (selection == null && path == null) {
+            Log.e(TAG, "no selection and no video in cammock library");
+            finish();
+            return;
+        }
+        Log.i(TAG, selection != null
+                ? "selection video=" + selection.videoId + " start=" + selection.startMs
+                : "fallback video=" + path);
         // 源视频平均约 12.6fps；系统相机请求通常 10~12fps。30fps 只增加
         // 解码、NV21 转换和写槽成本，不提供可见收益。
         final long frameIntervalNs = 1_000_000_000L / 15L;
@@ -216,7 +225,11 @@ public class ProducerActivity extends Activity {
             ByteBuffer map = ch.map(FileChannel.MapMode.READ_WRITE, 0, total);
             map.order(ByteOrder.LITTLE_ENDIAN);
             MediaExtractor ex = new MediaExtractor();
-            ex.setDataSource(path);
+            if (selection != null && selection.fd != null) {
+                ex.setDataSource(selection.fd);
+            } else {
+                ex.setDataSource(path);
+            }
             int track = -1;
             MediaFormat fmt = null;
             for (int i = 0; i < ex.getTrackCount(); i++) {
@@ -225,6 +238,9 @@ public class ProducerActivity extends Activity {
             }
             if (track < 0) { Log.e(TAG, "no video track"); finish(); return; }
             ex.selectTrack(track);
+            if (selection != null && selection.startMs > 0L) {
+                ex.seekTo(selection.startMs * 1000L, MediaExtractor.SEEK_TO_CLOSEST_SYNC);
+            }
             MediaCodec codec = MediaCodec.createDecoderByType(fmt.getString(MediaFormat.KEY_MIME));
             codec.configure(fmt, null, null, 0);
             codec.start();

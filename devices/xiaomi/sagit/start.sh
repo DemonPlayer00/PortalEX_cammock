@@ -86,10 +86,13 @@ if [ -f "$DIR/producer.apk" ]; then
         echo "producer: VIDEO=$VIDEO" >>/data/local/tmp/portalex/cammock-start.log
         # 必须再套一层 su：app 调起的脚本可能仍带 app UID 的 am 身份，
         # producer 会被 AppsFilter 拦截；root 身份启动才稳定。
+        # producer 通过标准选片接口向 system_server 请求 fd；video 仅作为旧实现的回退。
         if [ -n "$VIDEO" ]; then
             /system/bin/su -c "am force-stop $PRODUCER_PKG; am start -n '$PRODUCER_PKG/.ProducerActivity' --es video '$VIDEO' --es token '$PORTALEX_CAMMOCK_TOKEN'" >>/data/local/tmp/portalex/cammock-start.log 2>&1 || true
-            echo "producer: am rc=$?" >>/data/local/tmp/portalex/cammock-start.log
+        else
+            /system/bin/su -c "am force-stop $PRODUCER_PKG; am start -n '$PRODUCER_PKG/.ProducerActivity' --es token '$PORTALEX_CAMMOCK_TOKEN'" >>/data/local/tmp/portalex/cammock-start.log 2>&1 || true
         fi
+        echo "producer: am rc=$?" >>/data/local/tmp/portalex/cammock-start.log
     fi
 fi
 for i in $(seq 1 20); do
