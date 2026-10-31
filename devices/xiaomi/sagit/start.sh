@@ -33,13 +33,13 @@ if [ -x /data/adb/apd ]; then
 fi
 
 # 真实 HAL 副本缺失/被错误覆盖（shim 约 300KB，真件约 1MB）时重建。
-if [ ! -s "$UPPER/camera.msm8998.orig.so" ] || [ "$(stat -c %s "$UPPER/camera.msm8998.orig.so" 2>/dev/null || echo 0)" -lt 500000 ]; then
-    cp -f /vendor/lib/hw/camera.msm8998.so "$UPPER/camera.msm8998.orig.so" || {
+if [ ! -s "$UPPER/camera.msm8998.so.orig.so" ] || [ "$(stat -c %s "$UPPER/camera.msm8998.so.orig.so" 2>/dev/null || echo 0)" -lt 500000 ]; then
+    cp -f /vendor/lib/hw/camera.msm8998.so "$UPPER/camera.msm8998.so.orig.so" || {
         echo "failed to snapshot real HAL"
         exit 1
     }
     [ -f "$DIR/portal.cfg" ] && cp -f "$DIR/portal.cfg" "$UPPER/portal.cfg" 2>/dev/null || true
-    chcon u:object_r:vendor_file:s0 "$UPPER/camera.msm8998.orig.so" 2>/dev/null || true
+    chcon u:object_r:vendor_file:s0 "$UPPER/camera.msm8998.so.orig.so" 2>/dev/null || true
 fi
 # overlay 的 upper 必须放 shim 本身；只快照 orig HAL 会让 HAL 继续加载真实库。
 SHIM="$DIR/system/vendor/lib/hw/camera.msm8998.so"
