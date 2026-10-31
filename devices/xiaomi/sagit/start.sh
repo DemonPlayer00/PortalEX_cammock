@@ -9,14 +9,23 @@ echo "=== start $(date) pid=$$ arg=$0 ==="
 # “couldn't map segment 1: Permission denied”），复制到可执行的 system_lib_file 路径。
 stage_portalsensor() {
     pkg=moe.fuqiuluo.portalex
-    src=$(find /data/app -type f -path "*/$pkg-*/lib/arm64/libportalsensor.so" 2>/dev/null | head -1)
-    [ -n "$src" ] || return 0
+    # 必须按 PackageManager 当前路径取 lib，不能 find /data/app 的“第一条”：
+    # 升级后旧 APK 目录仍在，find 可能命中旧 .so，system_server 会加载到过期 ABI。
+    apk=$(pm path "$pkg" 2>/dev/null | sed -n 's/^package://p' | head -1)
+    [ -n "$apk" ] || return 0
+    src="${apk%/base.apk}/lib/arm64/libportalsensor.so"
+    [ -f "$src" ] || return 0
     dst=/data/local/tmp/portalex/libportalsensor.so
     mkdir -p /data/local/tmp/portalex 2>/dev/null || true
-    cp -f "$src" "$dst" || return 0
-    chmod 755 "$dst" 2>/dev/null || true
-    chcon u:object_r:system_lib_file:s0 "$dst" 2>/dev/null || true
-    echo "portalsensor staged: $dst"
+    # 不能 cp -f 原地覆盖：system_server 可能已经 mmap 了旧 inode，
+    # 覆盖会让正在执行的代码/GOT 读到半截内容并 SIGSEGV。先写临时文件，
+    # 再原子 rename；已加载的旧映射继续指向旧 inode，安全。
+    tmp="$dst.tmp.$$"
+    cp -f "$src" "$tmp" || return 0
+    chmod 755 "$tmp" 2>/dev/null || true
+    chcon u:object_r:system_lib_file:s0 "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$dst" || { rm -f "$tmp"; return 0; }
+    echo "portalsensor staged atomically: $dst"
 }
 stage_portalsensor
 # MI6 cammock 由 app 显式启动：挂载虚拟 HAL overlay，重启 camera provider。
