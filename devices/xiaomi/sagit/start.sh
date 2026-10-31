@@ -41,6 +41,13 @@ if [ ! -s "$UPPER/camera.msm8998.orig.so" ] || [ "$(stat -c %s "$UPPER/camera.ms
     [ -f "$DIR/portal.cfg" ] && cp -f "$DIR/portal.cfg" "$UPPER/portal.cfg" 2>/dev/null || true
     chcon u:object_r:vendor_file:s0 "$UPPER/camera.msm8998.orig.so" 2>/dev/null || true
 fi
+# overlay 的 upper 必须放 shim 本身；只快照 orig HAL 会让 HAL 继续加载真实库。
+SHIM="$DIR/system/vendor/lib/hw/camera.msm8998.so"
+if [ -f "$SHIM" ]; then
+    cp -f "$SHIM" "$UPPER/camera.msm8998.so" || { echo "failed to install camera shim"; exit 1; }
+    chmod 644 "$UPPER/camera.msm8998.so" 2>/dev/null || true
+    chcon u:object_r:vendor_file:s0 "$UPPER/camera.msm8998.so" 2>/dev/null || true
+fi
 if ! nsenter -t 1 -m -- mountpoint -q "$HALDIR" || ! nsenter -t 1 -m -- mount | grep -q "overlay.*$HALDIR"; then
     nsenter -t 1 -m -- mount -t overlay overlay -o "lowerdir=$HALDIR,upperdir=$UPPER,workdir=$WORK" "$HALDIR" || {
         echo "failed to mount HAL overlay"
