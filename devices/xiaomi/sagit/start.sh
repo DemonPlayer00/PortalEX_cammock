@@ -30,6 +30,8 @@ chcon u:object_r:shell_data_file:s0 "$FRAME_FILE" 2>/dev/null || true
 if [ -x /data/adb/apd ]; then
     /data/adb/apd sepolicy --live "allow hal_camera_default shell_data_file dir { search read open getattr }" 2>/dev/null || true
     /data/adb/apd sepolicy --live "allow hal_camera_default shell_data_file file { read write open getattr map }" 2>/dev/null || true
+    /data/adb/apd sepolicy --live "allow hal_camera_default cache_file dir { search read open getattr }" 2>/dev/null || true
+    /data/adb/apd sepolicy --live "allow hal_camera_default cache_file file { read open getattr map }" 2>/dev/null || true
 fi
 
 # 真实 HAL 副本缺失/被错误覆盖（shim 约 300KB，真件约 1MB）时重建。
