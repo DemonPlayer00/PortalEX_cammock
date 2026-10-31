@@ -10,14 +10,19 @@ echo "=== oneplus start $(date) pid=$$ user=$(id -u) arg=$0 ==="
 # “couldn't map segment 1: Permission denied”），复制到可执行的 system_lib_file 路径。
 stage_portalsensor() {
     pkg=moe.fuqiuluo.portalex
-    src=$(find /data/app -type f -path "*/$pkg-*/lib/arm64/libportalsensor.so" 2>/dev/null | head -1)
-    [ -n "$src" ] || return 0
+    apk=$(pm path "$pkg" 2>/dev/null | sed -n 's/^package://p' | head -1)
+    [ -n "$apk" ] || return 0
+    src="${apk%/base.apk}/lib/arm64/libportalsensor.so"
+    [ -f "$src" ] || return 0
     dst=/data/local/tmp/portalex/libportalsensor.so
     mkdir -p /data/local/tmp/portalex 2>/dev/null || true
-    cp -f "$src" "$dst" || return 0
-    chmod 755 "$dst" 2>/dev/null || true
-    chcon u:object_r:system_lib_file:s0 "$dst" 2>/dev/null || true
-    echo "portalsensor staged: $dst"
+    # 原子替换：system_server 可能已经 mmap 了旧 inode，不能 cp -f 原地覆盖。
+    tmp="$dst.tmp.$$"
+    cp -f "$src" "$tmp" || return 0
+    chmod 755 "$tmp" 2>/dev/null || true
+    chcon u:object_r:system_lib_file:s0 "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$dst" || { rm -f "$tmp"; return 0; }
+    echo "portalsensor staged atomically: $dst"
 }
 stage_portalsensor
 PROVIDER=$(readlink -f "$DIR/provider" 2>/dev/null || echo "$DIR/provider")
