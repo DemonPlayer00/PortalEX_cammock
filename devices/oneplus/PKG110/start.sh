@@ -6,25 +6,6 @@ exec >>/data/local/tmp/portalex/cammock-start.log 2>&1
 echo "=== oneplus start $(date) pid=$$ user=$(id -u) arg=$0 ==="
 . "$DIR/cammock_auth.sh" || exit 1
 
-# system_server 不能直接 dlopen /data/app 下的 apk_data_file .so（MI6 实测
-# “couldn't map segment 1: Permission denied”），复制到可执行的 system_lib_file 路径。
-stage_portalsensor() {
-    pkg=moe.fuqiuluo.portalex
-    apk=$(pm path "$pkg" 2>/dev/null | sed -n 's/^package://p' | head -1)
-    [ -n "$apk" ] || return 0
-    src="${apk%/base.apk}/lib/arm64/libportalsensor.so"
-    [ -f "$src" ] || return 0
-    dst=/data/local/tmp/portalex/libportalsensor.so
-    mkdir -p /data/local/tmp/portalex 2>/dev/null || true
-    # 原子替换：system_server 可能已经 mmap 了旧 inode，不能 cp -f 原地覆盖。
-    tmp="$dst.tmp.$$"
-    cp -f "$src" "$tmp" || return 0
-    chmod 755 "$tmp" 2>/dev/null || true
-    chcon u:object_r:system_lib_file:s0 "$tmp" 2>/dev/null || true
-    mv -f "$tmp" "$dst" || { rm -f "$tmp"; return 0; }
-    echo "portalsensor staged atomically: $dst"
-}
-stage_portalsensor
 PROVIDER=$(readlink -f "$DIR/provider" 2>/dev/null || echo "$DIR/provider")
 [ -x "$PROVIDER" ] || { echo "provider missing: $PROVIDER"; exit 1; }
 setprop ctl.stop vendor.camera-provider
