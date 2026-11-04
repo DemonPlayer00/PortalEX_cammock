@@ -15,9 +15,19 @@ setprop ctl.stop vendor.camera-provider
 kill_portal_provider() {
     # 不要遍历 /proc：该机实测一次全量 readlink 要 13s，单这一步就足以
     # 触发 CammockManager 的 30s 超时。pgrep 精确匹配 cmdline，几十毫秒完成。
-    for p in $(pgrep -f '^/data/.*/cammock/current/provider$' 2>/dev/null); do
-        kill -9 "$p" 2>/dev/null || true
-    done
+    if command -v pgrep >/dev/null 2>&1; then
+        for p in $(pgrep -f '^/data/.*/cammock/current/provider$' 2>/dev/null); do
+            kill -9 "$p" 2>/dev/null || true
+        done
+    else
+        # 兼容没有 toybox pgrep 的旧 ROM；正常 LineageOS/ColorOS 不会走这里。
+        for p in /proc/[0-9]*; do
+            exe=$(readlink "$p/exe" 2>/dev/null) || continue
+            case "$exe" in
+                */cammock/current/provider|*/cammock/current/provider\ \(deleted\)) kill -9 "$p" 2>/dev/null || true ;;
+            esac
+        done
+    fi
     sleep 0.3
 }
 kill_portal_provider
