@@ -276,8 +276,20 @@ void drawRgb(uint8_t* rgb, int w, int h, int frame) {
         }
         return;
     }
-    // 没有任何帧/人脸资源时输出黑帧。
-    std::memset(rgb, 0, (size_t)w * h * 3);
+    // 没有选片/人脸资源时输出可见彩条，便于区分“黑屏故障”和“没有素材”。
+    // LineageOS 分支不允许把无选片状态伪装成硬件黑屏。
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            int bar = ((x + frame * 7) % w) * 8 / w;
+            if (bar > 7) bar = 7;
+            const uint8_t bars[8][3] = {
+                {255, 0, 0}, {255, 128, 0}, {255, 255, 0}, {0, 255, 0},
+                {0, 255, 255}, {0, 0, 255}, {128, 0, 255}, {255, 0, 255},
+            };
+            uint8_t* p = rgb + ((size_t)y * w + x) * 3;
+            p[0] = bars[bar][0]; p[1] = bars[bar][1]; p[2] = bars[bar][2];
+        }
+    }
 }
 
 void drawYuv(YCbCr& yc, int w, int h, int frame) {
@@ -300,13 +312,22 @@ void drawYuv(YCbCr& yc, int w, int h, int frame) {
         }
         return;
     }
-    // 没有任何帧/人脸资源时输出黑帧。
+    // 没有选片/人脸资源时输出可见彩条，便于区分“黑屏故障”和“没有素材”。
+    // LineageOS 分支不允许把无选片状态伪装成硬件黑屏。
+    static const uint8_t ys[8] = {76, 150, 226, 150, 226, 29, 76, 105};
+    static const uint8_t us[8] = {85, 73, 0, 44, 128, 255, 214, 171};
+    static const uint8_t vs[8] = {240, 200, 149, 21, 43, 128, 197, 240};
     for (int y = 0; y < h; y++) {
-        std::memset((uint8_t*)yc.y + (size_t)y * yc.ystride, 16, (size_t)w);
-        if (yc.cb && yc.cr && yc.cstride) {
-            size_t ci = (size_t)(y / 2) * yc.cstride;
-            std::memset((uint8_t*)yc.cb + ci, 128, (size_t)(w / 2) * yc.chroma_step);
-            std::memset((uint8_t*)yc.cr + ci, 128, (size_t)(w / 2) * yc.chroma_step);
+        uint8_t* row = (uint8_t*)yc.y + (size_t)y * yc.ystride;
+        for (int x = 0; x < w; x++) {
+            int bar = ((x + frame * 7) % w) * 8 / w;
+            if (bar > 7) bar = 7;
+            row[x] = ys[bar];
+            if (yc.cb && yc.cr && yc.cstride) {
+                size_t ci = (size_t)(y / 2) * yc.cstride + (size_t)(x / 2) * yc.chroma_step;
+                ((uint8_t*)yc.cb)[ci] = us[bar];
+                ((uint8_t*)yc.cr)[ci] = vs[bar];
+            }
         }
     }
     return;
