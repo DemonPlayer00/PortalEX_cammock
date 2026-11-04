@@ -331,31 +331,6 @@ void drawYuv(YCbCr& yc, int w, int h, int frame) {
         }
     }
     return;
-    int radius = std::max(8, std::min(w, h) / 7);
-    int spanX = std::max(1, w - 2 * radius);
-    int spanY = std::max(1, h - 2 * radius);
-    int cx = radius + tri(frame * 9, spanX);
-    int cy = radius + tri(frame * 5 + 17, spanY);
-    int r2 = radius * radius, rin = (radius - 4) * (radius - 4);
-    static const uint8_t ys[8] = {76, 150, 226, 150, 226, 29, 76, 105};
-    static const uint8_t us[8] = {85, 73, 0, 44, 128, 255, 214, 171};
-    static const uint8_t vs[8] = {240, 200, 149, 21, 43, 128, 197, 240};
-    for (int y = 0; y < h; y++) {
-        uint8_t* row = (uint8_t*)yc.y + (size_t)y * yc.ystride;
-        for (int x = 0; x < w; x++) {
-            int bar = ((x + frame * 7) % w) * 8 / w;
-            if (bar > 7) bar = 7;
-            uint8_t v = ys[bar];
-            int dx = x - cx, dy = y - cy, d2 = dx * dx + dy * dy;
-            if (d2 <= r2) v = d2 > rin ? 16 : 235;
-            row[x] = v;
-            if (yc.cb && yc.cr && yc.cstride) {
-                size_t ci = (size_t)(y / 2) * yc.cstride + (size_t)(x / 2) * yc.chroma_step;
-                ((uint8_t*)yc.cb)[ci] = us[bar];
-                ((uint8_t*)yc.cr)[ci] = vs[bar];
-            }
-        }
-    }
 }
 
 }  // namespace
