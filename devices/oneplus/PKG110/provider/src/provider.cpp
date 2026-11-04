@@ -791,11 +791,22 @@ static void buildStaticMetadata(CameraMetadata* cm) {
     u8 = 0; A(ANDROID_SENSOR_INFO_COLOR_FILTER_ARRANGEMENT, &u8, 1);
     u8 = 0; A(ANDROID_LENS_INFO_FOCUS_DISTANCE_CALIBRATION, &u8, 1);
     u8 = 0; A(ANDROID_LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION, &u8, 1);
-    u8 = 0; A(ANDROID_CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES, &u8, 1);
-    u8 = 0; A(ANDROID_CONTROL_AVAILABLE_EFFECTS, &u8, 1);
-    u8 = 0; A(ANDROID_CONTROL_AVAILABLE_SCENE_MODES, &u8, 1);
-    u8 = 0; A(ANDROID_CONTROL_AF_AVAILABLE_MODES, &u8, 1);
-    u8 = 1; A(ANDROID_CONTROL_AVAILABLE_MODES, &u8, 1);
+    // Legacy Camera1（百度人脸 SDK 等）会按这些列表校验 setParameters。
+    // 只声明 OFF 会让 FOCUS_MODE_AUTO/CONTINUOUS_* 直接 setParameters failed。
+    {
+        uint8_t videoStab[] = {0, 1};
+        A(ANDROID_CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES, videoStab, 2);
+        uint8_t effects[] = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+        A(ANDROID_CONTROL_AVAILABLE_EFFECTS, effects, 9);
+        uint8_t scenes[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+        A(ANDROID_CONTROL_AVAILABLE_SCENE_MODES, scenes, 11);
+        uint8_t afModes[] = {0, 1, 2, 3, 4}; /* OFF/AUTO/MACRO/CONT_VIDEO/CONT_PICTURE */
+        A(ANDROID_CONTROL_AF_AVAILABLE_MODES, afModes, 5);
+        uint8_t controlModes[] = {0, 1, 2}; /* OFF/AUTO/USE_SCENE_MODE */
+        A(ANDROID_CONTROL_AVAILABLE_MODES, controlModes, 3);
+        uint8_t antibanding[] = {0, 1, 2, 3};
+        A(ANDROID_CONTROL_AE_AVAILABLE_ANTIBANDING_MODES, antibanding, 4);
+    }
     u8 = 1; A(ANDROID_CONTROL_AE_AVAILABLE_MODES, &u8, 1);
     u8 = 1; A(ANDROID_CONTROL_AWB_AVAILABLE_MODES, &u8, 1);
     u8 = 0; A(ANDROID_STATISTICS_INFO_AVAILABLE_FACE_DETECT_MODES, &u8, 1);
@@ -858,7 +869,8 @@ static void buildStaticMetadata(CameraMetadata* cm) {
     A(ANDROID_REQUEST_AVAILABLE_CHARACTERISTICS_KEYS, i32, 0);
 
     static const int32_t kSizes[][2] = {
-        {640,480}, {1280,720}, {1920,1080}, {2592,1944}
+        {352,288}, {640,480}, {720,480}, {800,600}, {1024,768},
+        {1280,720}, {1280,960}, {1920,1080}, {2592,1944}
     };
     static const int32_t kFormats[] = {0x23, 0x21, 0x22}; /* YUV, JPEG, PRIVATE */
     int n = 0;
