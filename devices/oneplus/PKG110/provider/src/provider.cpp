@@ -777,8 +777,9 @@ static void buildStaticMetadata(CameraMetadata* cm) {
     };
 
     uint8_t u8;
-    int32_t i32[64];
-    int64_t i64[64];
+    // 9 个预览尺寸 × 3 种格式 × 4 个字段 = 108，旧 64 会直接栈溢出。
+    int32_t i32[512];
+    int64_t i64[512];
     float f32[4];
     Rational rat;
 
