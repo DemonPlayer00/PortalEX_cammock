@@ -13,23 +13,12 @@ setprop ctl.stop vendor.camera-provider
 # LineageOS 上旧的 provider 可能映射的是已被替换的 inode（readlink 末尾带 deleted），
 # 只比较完整路径会漏杀。统一按 cammock/current/provider 前缀清理，并等进程真的退出。
 kill_portal_provider() {
-    for p in /proc/[0-9]*; do
-        exe=$(readlink "$p/exe" 2>/dev/null) || continue
-        case "$exe" in
-            */cammock/current/provider|*/cammock/current/provider\ \(deleted\)) kill -9 "$p" 2>/dev/null || true ;;
-        esac
+    # 不要遍历 /proc：该机实测一次全量 readlink 要 13s，单这一步就足以
+    # 触发 CammockManager 的 30s 超时。pgrep 精确匹配 cmdline，几十毫秒完成。
+    for p in $(pgrep -f '^/data/.*/cammock/current/provider$' 2>/dev/null); do
+        kill -9 "$p" 2>/dev/null || true
     done
-    for i in $(seq 1 20); do
-        alive=0
-        for p in /proc/[0-9]*; do
-            exe=$(readlink "$p/exe" 2>/dev/null) || continue
-            case "$exe" in
-                */cammock/current/provider|*/cammock/current/provider\ \(deleted\)) alive=1; break ;;
-            esac
-        done
-        [ "$alive" = 0 ] && break
-        sleep 0.1
-    done
+    sleep 0.3
 }
 kill_portal_provider
 sleep 1
