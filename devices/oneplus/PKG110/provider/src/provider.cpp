@@ -276,20 +276,8 @@ void drawRgb(uint8_t* rgb, int w, int h, int frame) {
         }
         return;
     }
-    // 没有选片/人脸资源时输出可见彩条，便于区分“黑屏故障”和“没有素材”。
-    // LineageOS 分支不允许把无选片状态伪装成硬件黑屏。
-    for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-            int bar = ((x + frame * 7) % w) * 8 / w;
-            if (bar > 7) bar = 7;
-            const uint8_t bars[8][3] = {
-                {255, 0, 0}, {255, 128, 0}, {255, 255, 0}, {0, 255, 0},
-                {0, 255, 255}, {0, 0, 255}, {128, 0, 255}, {255, 0, 255},
-            };
-            uint8_t* p = rgb + ((size_t)y * w + x) * 3;
-            p[0] = bars[bar][0]; p[1] = bars[bar][1]; p[2] = bars[bar][2];
-        }
-    }
+    // 没有任何帧/人脸资源时输出黑帧。
+    std::memset(rgb, 0, (size_t)w * h * 3);
 }
 
 void drawYuv(YCbCr& yc, int w, int h, int frame) {
@@ -312,8 +300,22 @@ void drawYuv(YCbCr& yc, int w, int h, int frame) {
         }
         return;
     }
-    // 没有选片/人脸资源时输出可见彩条，便于区分“黑屏故障”和“没有素材”。
-    // LineageOS 分支不允许把无选片状态伪装成硬件黑屏。
+    // 没有任何帧/人脸资源时输出黑帧。
+    for (int y = 0; y < h; y++) {
+        std::memset((uint8_t*)yc.y + (size_t)y * yc.ystride, 16, (size_t)w);
+        if (yc.cb && yc.cr && yc.cstride) {
+            size_t ci = (size_t)(y / 2) * yc.cstride;
+            std::memset((uint8_t*)yc.cb + ci, 128, (size_t)(w / 2) * yc.chroma_step);
+            std::memset((uint8_t*)yc.cr + ci, 128, (size_t)(w / 2) * yc.chroma_step);
+        }
+    }
+    return;
+    int radius = std::max(8, std::min(w, h) / 7);
+    int spanX = std::max(1, w - 2 * radius);
+    int spanY = std::max(1, h - 2 * radius);
+    int cx = radius + tri(frame * 9, spanX);
+    int cy = radius + tri(frame * 5 + 17, spanY);
+    int r2 = radius * radius, rin = (radius - 4) * (radius - 4);
     static const uint8_t ys[8] = {76, 150, 226, 150, 226, 29, 76, 105};
     static const uint8_t us[8] = {85, 73, 0, 44, 128, 255, 214, 171};
     static const uint8_t vs[8] = {240, 200, 149, 21, 43, 128, 197, 240};
@@ -322,7 +324,10 @@ void drawYuv(YCbCr& yc, int w, int h, int frame) {
         for (int x = 0; x < w; x++) {
             int bar = ((x + frame * 7) % w) * 8 / w;
             if (bar > 7) bar = 7;
-            row[x] = ys[bar];
+            uint8_t v = ys[bar];
+            int dx = x - cx, dy = y - cy, d2 = dx * dx + dy * dy;
+            if (d2 <= r2) v = d2 > rin ? 16 : 235;
+            row[x] = v;
             if (yc.cb && yc.cr && yc.cstride) {
                 size_t ci = (size_t)(y / 2) * yc.cstride + (size_t)(x / 2) * yc.chroma_step;
                 ((uint8_t*)yc.cb)[ci] = us[bar];
@@ -330,7 +335,6 @@ void drawYuv(YCbCr& yc, int w, int h, int frame) {
             }
         }
     }
-    return;
 }
 
 }  // namespace
