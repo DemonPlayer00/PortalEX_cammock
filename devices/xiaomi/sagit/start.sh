@@ -17,6 +17,15 @@ if nsenter -t 1 -m -- mountpoint -q "$HALDIR"; then
     nsenter -t 1 -m -- umount "$HALDIR" 2>/dev/null || nsenter -t 1 -m -- umount -l "$HALDIR" 2>/dev/null || true
     sleep 1
 fi
+# camshim 实际读取的是 /data/vendor/camera/portal.cfg；实现包里的配置必须每次
+# 覆盖到这里，否则重新导入实现后新开关不会生效（旧实现只在 overlay 快照时拷贝）。
+if [ -f "$DIR/portal.cfg" ]; then
+    mkdir -p /data/vendor/camera
+    cp -f "$DIR/portal.cfg" /data/vendor/camera/portal.cfg
+    chown root:root /data/vendor/camera/portal.cfg 2>/dev/null || true
+    chmod 644 /data/vendor/camera/portal.cfg 2>/dev/null || true
+fi
+
 # cammock.frames 的权限/SELinux 标签在重启后会丢；每次启动重新准备，
 # 否则 camshim 会以 errno=13 打不开帧文件，照片注入退化为真实相机。
 FRAME_DIR=/data/local/tmp/portalex
