@@ -451,6 +451,8 @@ static int g_opt_swap_uv = 0;
 static int g_opt_rotate = 1;
 /** 640x480 的 PRIVATE 预览面在 MI6 上实际是 RGBA，强制走 RGBA 转换。 */
 static int g_opt_force_rgba = 0;
+/** 不旋转时是否做上下翻转；用于修正源视频解码后的倒置画面。 */
+static int g_opt_flip_vertical = 0;
 /**
  * 真实 HAL 的路径与"照抄多少字节"。
  *
@@ -983,6 +985,8 @@ static void load_options(void) {
             else g_opt_rotate = atoi(val);
         } else if (strcmp(key, "force_rgba") == 0) {
             g_opt_force_rgba = atoi(val);
+        } else if (strcmp(key, "flip_vertical") == 0) {
+            g_opt_flip_vertical = atoi(val);
         } else if (strcmp(key, "photo_mirror") == 0) {
             g_opt_photo_mirror = atoi(val);
         } else if (strcmp(key, "real_hal") == 0) {
@@ -3025,9 +3029,10 @@ static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uin
                 for (uint32_t x = 0; x < w; x++) {
                     uint32_t rx = cols[x];
                     uint32_t sx = CAMMOCK_ROTATE_RIGHT ? ry :
-                                  (CAMMOCK_ROTATE_LEFT ? sw - 1u - ry : ry);
+                                  (CAMMOCK_ROTATE_LEFT ? sw - 1u - ry : rx);
                     uint32_t syy = CAMMOCK_ROTATE_RIGHT ? sh - 1u - rx :
-                                   (CAMMOCK_ROTATE_LEFT ? rx : rx);
+                                   (CAMMOCK_ROTATE_LEFT ? rx :
+                                    (g_opt_flip_vertical ? sh - 1u - ry : ry));
                     drow[x] = src[(size_t)syy * sy + sx];
                 }
             }
@@ -3039,8 +3044,10 @@ static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uin
             for (uint32_t x = 0; x < w; x++) {
                 uint32_t rx = (uint32_t)((uint64_t)x * rw / w);
                 uint32_t sx = CAMMOCK_ROTATE_RIGHT ? ry :
-                              (CAMMOCK_ROTATE_LEFT ? sw - 1u - ry : ry);
-                uint32_t syy = CAMMOCK_ROTATE_RIGHT ? sh - 1u - rx : rx;
+                              (CAMMOCK_ROTATE_LEFT ? sw - 1u - ry : rx);
+                uint32_t syy = CAMMOCK_ROTATE_RIGHT ? sh - 1u - rx :
+                              (CAMMOCK_ROTATE_LEFT ? rx :
+                               (g_opt_flip_vertical ? sh - 1u - ry : ry));
                 if (sx >= sw) sx = sw - 1u;
                 if (syy >= sh) syy = sh - 1u;
                 drow[x] = src[(size_t)syy * sy + sx];
@@ -3088,8 +3095,8 @@ static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uin
                     scx = (sw / 2) - 1u - ry;
                     scy = rx;
                 } else {
-                    scx = ry;
-                    scy = rx;
+                    scx = rx;
+                    scy = g_opt_flip_vertical ? (sh / 2) - 1u - ry : ry;
                 }
                 if (scx >= sw / 2) scx = (sw / 2) - 1u;
                 if (scy >= sh / 2) scy = (sh / 2) - 1u;
@@ -3121,8 +3128,10 @@ static bool portal_fill_rgba_external(uint8_t *dst, uint32_t w, uint32_t h, size
         for (uint32_t x = 0; x < w; x++) {
             uint32_t rx = (uint32_t)((uint64_t)x * rw / w);
             uint32_t sx = CAMMOCK_ROTATE_RIGHT ? ry :
-                           (CAMMOCK_ROTATE_LEFT ? sw - 1u - ry : ry);
-            uint32_t syy = CAMMOCK_ROTATE_RIGHT ? sh - 1u - rx : rx;
+                           (CAMMOCK_ROTATE_LEFT ? sw - 1u - ry : rx);
+            uint32_t syy = CAMMOCK_ROTATE_RIGHT ? sh - 1u - rx :
+                           (CAMMOCK_ROTATE_LEFT ? rx :
+                            (g_opt_flip_vertical ? sh - 1u - ry : ry));
             if (sx >= sw) sx = sw - 1u;
             if (syy >= sh) syy = sh - 1u;
             int yy = src[(size_t)syy * sy + sx] - 16;
