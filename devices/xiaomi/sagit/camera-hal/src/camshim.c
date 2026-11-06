@@ -447,6 +447,10 @@ static char g_opt_cam[16] = {0};
 static char g_opt_src_file[160] = {0};
 /** 色度 U/V 是否互换（NV12 ↔ NV21）：这种错只有看图才认得出，故做运行期开关 */
 static int g_opt_swap_uv = 0;
+/** 旋转：0=不转，1=顺时针 90，2=逆时针 90。默认保持旧行为。 */
+static int g_opt_rotate = 1;
+/** 640x480 的 PRIVATE 预览面在 MI6 上实际是 RGBA，强制走 RGBA 转换。 */
+static int g_opt_force_rgba = 0;
 /**
  * 真实 HAL 的路径与"照抄多少字节"。
  *
@@ -972,6 +976,13 @@ static void load_options(void) {
             g_opt_auto_color = (int)(strtoul(val, NULL, 0) & 0xFFu);
         } else if (strcmp(key, "swap_uv") == 0) {
             g_opt_swap_uv = atoi(val);
+        } else if (strcmp(key, "rotate") == 0) {
+            if (strcmp(val, "left") == 0 || strcmp(val, "ccw") == 0) g_opt_rotate = 2;
+            else if (strcmp(val, "none") == 0 || strcmp(val, "off") == 0) g_opt_rotate = 0;
+            else if (strcmp(val, "right") == 0 || strcmp(val, "cw") == 0) g_opt_rotate = 1;
+            else g_opt_rotate = atoi(val);
+        } else if (strcmp(key, "force_rgba") == 0) {
+            g_opt_force_rgba = atoi(val);
         } else if (strcmp(key, "photo_mirror") == 0) {
             g_opt_photo_mirror = atoi(val);
         } else if (strcmp(key, "real_hal") == 0) {
@@ -2925,8 +2936,10 @@ static struct portal_scale_maps *portal_build_maps(int slot, uint32_t sw, uint32
  * 把外源帧拷进目标平面。几何/布局不一致时**只拷重叠区**（左上对齐）并记一条，
  * 不做缩放 —— 缩放应该由 app 侧的解码器在 Surface 上完成（那是免费的 GPU 缩放）。
  */
-/* MI6 摄像头调用方的素材方向：源竖屏帧需要顺时针 90°。 */
-#define CAMMOCK_ROTATE_RIGHT 1
+/* MI6 默认旋转方向；可由 portal.cfg 的 rotate 覆盖。 */
+#define CAMMOCK_ROTATE_RIGHT (g_opt_rotate == 1)
+#define CAMMOCK_ROTATE_LEFT (g_opt_rotate == 2)
+#define CAMMOCK_ROTATE_ANY (g_opt_rotate != 0)
 
 static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uint8_t *dcr,
                                  size_t dcstride, size_t dstep, uint32_t w, uint32_t h) {
@@ -2984,15 +2997,15 @@ static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uin
 
     /* 源是 NV21；按目标 android_ycbcr 的 cb/cr 实际指向决定 U/V 顺序。
      * 旋转后不能直接 memcpy 源 UV，否则会偏绿/偏紫。 */
-    const uint32_t rw = CAMMOCK_ROTATE_RIGHT ? sh : sw;
-    const uint32_t rh = CAMMOCK_ROTATE_RIGHT ? sw : sh;
+    const uint32_t rw = CAMMOCK_ROTATE_ANY ? sh : sw;
+    const uint32_t rh = CAMMOCK_ROTATE_ANY ? sw : sh;
     /* 旋转后的坐标走预计算 map：逐像素 64 位除法是 1600 预览每帧
      * ~150ms 的主因。 */
     struct portal_scale_maps *ymap = portal_build_maps(0, rw, rh, w, h, sy, true);
     if (ymap != NULL) {
         const uint32_t *rows = ymap->rows;
         const uint32_t *cols = ymap->cols;
-        if (ymap->rotate && ymap->offsets != NULL) {
+        if (CAMMOCK_ROTATE_RIGHT && ymap->rotate && ymap->offsets != NULL) {
             const uint32_t TILE = 8;
             for (uint32_t y = 0; y < h; y += TILE) {
                 uint32_t n = h - y < TILE ? h - y : TILE;
@@ -3011,8 +3024,10 @@ static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uin
                 uint8_t *drow = dy + (size_t)y * dystride;
                 for (uint32_t x = 0; x < w; x++) {
                     uint32_t rx = cols[x];
-                    uint32_t sx = CAMMOCK_ROTATE_RIGHT ? ry : sw - 1u - ry;
-                    uint32_t syy = CAMMOCK_ROTATE_RIGHT ? sh - 1u - rx : rx;
+                    uint32_t sx = CAMMOCK_ROTATE_RIGHT ? ry :
+                                  (CAMMOCK_ROTATE_LEFT ? sw - 1u - ry : ry);
+                    uint32_t syy = CAMMOCK_ROTATE_RIGHT ? sh - 1u - rx :
+                                   (CAMMOCK_ROTATE_LEFT ? rx : rx);
                     drow[x] = src[(size_t)syy * sy + sx];
                 }
             }
@@ -3023,7 +3038,8 @@ static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uin
             uint8_t *drow = dy + (size_t)y * dystride;
             for (uint32_t x = 0; x < w; x++) {
                 uint32_t rx = (uint32_t)((uint64_t)x * rw / w);
-                uint32_t sx = CAMMOCK_ROTATE_RIGHT ? ry : sw - 1u - ry;
+                uint32_t sx = CAMMOCK_ROTATE_RIGHT ? ry :
+                              (CAMMOCK_ROTATE_LEFT ? sw - 1u - ry : ry);
                 uint32_t syy = CAMMOCK_ROTATE_RIGHT ? sh - 1u - rx : rx;
                 if (sx >= sw) sx = sw - 1u;
                 if (syy >= sh) syy = sh - 1u;
@@ -3042,7 +3058,7 @@ static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uin
     if (cw == 0 || ch == 0) return true;
     const uint32_t rwc = rw / 2, rhc = rh / 2;
     struct portal_scale_maps *cmap = portal_build_maps(1, rwc, rhc, cw, ch, suv, true);
-    if (cmap && cmap->rotate && cmap->offsets != NULL) {
+    if (CAMMOCK_ROTATE_RIGHT && cmap && cmap->rotate && cmap->offsets != NULL) {
         const uint32_t TILE = 8;
         for (uint32_t y = 0; y < ch; y += TILE) {
             uint32_t n = ch - y < TILE ? ch - y : TILE;
@@ -3054,8 +3070,8 @@ static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uin
                     const uint8_t *sp = suvp + off + (size_t)ryv[k] * 2;
                     size_t di = (size_t)(y + k) * dcstride + (size_t)x * cstep;
                     // android_ycbcr 的 cb/cr 已经是语义指针：cb=U、cr=V。
-                    dcb[di] = sp[1]; /* U */
-                    dcr[di] = sp[0]; /* V */
+                    dcb[di] = g_opt_swap_uv ? sp[0] : sp[1]; /* U */
+                    dcr[di] = g_opt_swap_uv ? sp[1] : sp[0]; /* V */
                 }
             }
         }
@@ -3068,16 +3084,19 @@ static bool portal_copy_external(uint8_t *dy, size_t dystride, uint8_t *dcb, uin
                 if (CAMMOCK_ROTATE_RIGHT) {
                     scx = ry;
                     scy = (sh / 2) - 1u - rx;
-                } else {
+                } else if (CAMMOCK_ROTATE_LEFT) {
                     scx = (sw / 2) - 1u - ry;
+                    scy = rx;
+                } else {
+                    scx = ry;
                     scy = rx;
                 }
                 if (scx >= sw / 2) scx = (sw / 2) - 1u;
                 if (scy >= sh / 2) scy = (sh / 2) - 1u;
                 const uint8_t *sp = suvp + (size_t)scy * suv + (size_t)scx * 2;
                 size_t di = (size_t)y * dcstride + (size_t)x * cstep;
-                dcb[di] = sp[1]; /* U */
-                dcr[di] = sp[0]; /* V */
+                dcb[di] = g_opt_swap_uv ? sp[0] : sp[1]; /* U */
+                dcr[di] = g_opt_swap_uv ? sp[1] : sp[0]; /* V */
             }
         }
     }
@@ -3094,14 +3113,16 @@ static bool portal_fill_rgba_external(uint8_t *dst, uint32_t w, uint32_t h, size
     if (src == NULL || hdr == NULL || dst == NULL || w == 0 || h == 0) return false;
     const uint32_t sw = hdr->width, sh = hdr->height, sy = hdr->y_stride, suv = hdr->uv_stride;
     if (sw == 0 || sh == 0 || sy < sw || suv < sw) return false;
-    const uint32_t rw = sh, rh = sw; /* MI6 固定顺时针 90° */
+    const uint32_t rw = CAMMOCK_ROTATE_ANY ? sh : sw;
+    const uint32_t rh = CAMMOCK_ROTATE_ANY ? sw : sh;
     const uint8_t *uv = src + (size_t)sy * sh;
     for (uint32_t y = 0; y < h; y++) {
         uint32_t ry = (uint32_t)((uint64_t)y * rh / h);
         for (uint32_t x = 0; x < w; x++) {
             uint32_t rx = (uint32_t)((uint64_t)x * rw / w);
-            uint32_t sx = ry;
-            uint32_t syy = sh - 1u - rx;
+            uint32_t sx = CAMMOCK_ROTATE_RIGHT ? ry :
+                           (CAMMOCK_ROTATE_LEFT ? sw - 1u - ry : ry);
+            uint32_t syy = CAMMOCK_ROTATE_RIGHT ? sh - 1u - rx : rx;
             if (sx >= sw) sx = sw - 1u;
             if (syy >= sh) syy = sh - 1u;
             int yy = src[(size_t)syy * sy + sx] - 16;
@@ -3211,6 +3232,17 @@ static struct portal_map *portal_get_map(void *handle, uint32_t w, uint32_t h) {
             free_slot->used = true;
             free_slot->rgba = false;
             free_slot->rgba_stride = 0;
+            // 640x480 PRIVATE 面在 MI6 上实际是 RGBA；lockYCbCr 成功也不代表
+            // 它是 YUV，强制走 RGBA 转换以消除绿色闪烁。
+            if (g_opt_force_rgba && w == 640u && h == 480u) {
+                free_slot->rgba = true;
+                free_slot->rgba_stride = (size_t)w * 4;
+                free_slot->y = (uint8_t *)yc.y;
+                free_slot->cb = free_slot->cr = NULL;
+                free_slot->cstride = 0;
+                free_slot->chroma_step = 0;
+                LOGI("force_rgba：将 %ux%u 按 RGBA 写入", w, h);
+            }
             return free_slot;
         }
         PORTAL_LOG_ONCE(LOGE, "lockYCbCr 失败 rc=%d（y=%p ystride=%zu）→ 退 lock()", rc, yc.y,
