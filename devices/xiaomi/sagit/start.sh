@@ -82,7 +82,8 @@ if [ -f "$DIR/producer.apk" ]; then
     echo "producer: PUID=$PUID" >>/data/local/tmp/portalex/cammock-start.log
     if [ -n "$PUID" ]; then
         mkdir -p /data/data/$PRODUCER_PKG/files
-        printf '%s\n' "$PORTALEX_CAMMOCK_TOKEN" > /data/data/$PRODUCER_PKG/files/auth.token
+        # 直接复制已通过 cammock_auth.sh 校验的 token，避免换行/转义差异。
+        cp -f "$DIR/auth.token" /data/data/$PRODUCER_PKG/files/auth.token
         chown -R "$PUID:$PUID" /data/data/$PRODUCER_PKG/files
         chmod 700 /data/data/$PRODUCER_PKG/files
         chmod 600 /data/data/$PRODUCER_PKG/files/auth.token
